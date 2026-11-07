@@ -107,17 +107,20 @@ D:\Work_dsi\2026\OCR_Setup\
 
 ---
 
-### Phase 3: High-Fidelity Typography, Palette & Multi-Column Layout
+### Phase 3: High-Fidelity Typography, Palette & Multi-Column Layout [COMPLETED & VERIFIED]
 * **Objective**: Replicate the exact visual styling (fonts, sizes, colors, columns) of the original document.
-* **Tasks**:
+* **Tasks Completed**:
   1. **Dynamic Font-Size Point Scaling**:
      $$\text{Font Size (Pt)} = \frac{\text{BBox Height (px)}}{\text{DPI}} \times 72 \times \text{Typography Scale}$$
-     Automatically detects titles ($18-22\text{pt}$), headings ($13-15\text{pt}$), body text ($10-11\text{pt}$), and footnotes ($8-9\text{pt}$).
-  2. **RGB Color Extraction**:
-     Sample pixel color values under text bounding boxes using OpenCV/PIL. Preserve blue headings (`#003366`), dark grey body text, and red warning labels in Word (`w:color`).
+     Implemented in [`convert.py`](file:///d:/Work_dsi/2026/OCR_Setup/convert.py) and [`core/docx_compiler.py`](file:///d:/Work_dsi/2026/OCR_Setup/core/docx_compiler.py): Automatically scales titles ($18-22\text{pt}$ Heading 1), section heads ($13-16\text{pt}$ Heading 2), questions ($12\text{pt}$ Heading 3), bullet lists ($10.5\text{pt}$), body text ($10.5\text{pt}$), and fine print / footers ($8.5-9.5\text{pt}$).
+  2. **RGB Color Extraction & Cell Background Tinting**:
+     Implemented [`sample_text_color_from_crop`](file:///d:/Work_dsi/2026/OCR_Setup/core/layout_engine.py#L125-L162) and [`sample_cell_background_color`](file:///d:/Work_dsi/2026/OCR_Setup/core/layout_engine.py#L165-L188): Samples exact ink stroke colors (e.g. navy blue `#004059`, warm brown, slate grey) and applies them to Word text runs (`w:color`), as well as `#F2F4F7` cell background fills (`w:shd`).
   3. **Recursive XY-Cut++ Multi-Column Flow**:
-     Detect multi-column pages. Split columns cleanly so Word generates native multi-column sections (`w:cols num="2"`). Text flows down Column 1, then Column 2.
-* **Quality Gate**: 2-column pages flow naturally in Word without text jumping horizontally across columns.
+     Implemented in [`core/layout_engine.py`](file:///d:/Work_dsi/2026/OCR_Setup/core/layout_engine.py#L50-L122) and [`core/ocr_engine.py`](file:///d:/Work_dsi/2026/OCR_Setup/core/ocr_engine.py#L95-L135): Decomposes full-width spanning headers/footers and vertical column gutters so 2-column and multi-column documents flow down Column 1, then Column 2, with zero interleaving.
+* **Quality Gate Verification**:
+  - Page 1 cover: Verified navy blue branding `#004059` at 22pt Heading 1 and subtitle hierarchy.
+  - Page 18: Verified Heading 2 (15.5pt), Heading 3 (12.0pt), bullets (10.5pt), and table with shaded `#F2F4F7` headers and right-aligned numeric data.
+  - Synthetic 2-column document: Verified reading order flows Column 1 (Q1, Answer 1, Q2, Answer 2) then Column 2 (Q3, Answer 3, Q4, Answer 4), cleanly bounded by spanning header and footer.
 
 ---
 

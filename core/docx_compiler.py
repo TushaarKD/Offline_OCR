@@ -1,6 +1,10 @@
 """
 docx_compiler.py - Direct Document IR to Microsoft Word (.docx) Flow Synthesizer
-Compiles a DocumentModel into a professional Microsoft Word document using native flow elements.
+Compiles a DocumentModel into a professional Microsoft Word document using native flow elements:
+- Built-in Headings (Heading 1, 2, 3) with dynamic point scaling and exact brand colors
+- Native List Bullets with proper indentation
+- True 2D Tables with proportional column widths, numeric right-alignment, and background shading
+- Clean page breaks, standard margins, and zero floating frames
 """
 
 import os
@@ -64,7 +68,7 @@ def _compile_run(paragraph, run_model: RunModel):
 
 
 def _compile_paragraph(doc: Document, p_model: ParagraphModel):
-    """Compile ParagraphModel to a native Word paragraph."""
+    """Compile ParagraphModel to a native Word paragraph with typography spacing."""
     style_name = p_model.style or "Normal"
 
     # Add paragraph with specific built-in style
@@ -78,8 +82,30 @@ def _compile_paragraph(doc: Document, p_model: ParagraphModel):
         p = doc.add_paragraph(style=style_name)
 
     _apply_alignment(p, p_model.alignment)
-    p.paragraph_format.space_before = Pt(p_model.space_before_pt)
-    p.paragraph_format.space_after = Pt(p_model.space_after_pt)
+
+    # Adaptive typographic spacing
+    if p_model.space_before_pt > 0:
+        p.paragraph_format.space_before = Pt(p_model.space_before_pt)
+    elif style_name == "Heading 1":
+        p.paragraph_format.space_before = Pt(12)
+    elif style_name == "Heading 2":
+        p.paragraph_format.space_before = Pt(8)
+    elif style_name == "Heading 3":
+        p.paragraph_format.space_before = Pt(6)
+    elif style_name == "List Bullet":
+        p.paragraph_format.space_before = Pt(1)
+
+    if p_model.space_after_pt > 0:
+        p.paragraph_format.space_after = Pt(p_model.space_after_pt)
+    elif style_name == "Heading 1":
+        p.paragraph_format.space_after = Pt(4)
+    elif style_name == "Heading 2":
+        p.paragraph_format.space_after = Pt(3)
+    elif style_name == "Heading 3":
+        p.paragraph_format.space_after = Pt(2)
+    elif style_name == "List Bullet":
+        p.paragraph_format.space_after = Pt(2)
+
     p.paragraph_format.line_spacing = p_model.line_spacing
 
     for r_model in p_model.runs:
@@ -87,7 +113,7 @@ def _compile_paragraph(doc: Document, p_model: ParagraphModel):
 
 
 def _compile_table(doc: Document, t_model: TableModel, page_content_width: float = 7.0):
-    """Compile TableModel to a native Word table with proportional columns and merged cells."""
+    """Compile TableModel to a native Word table with proportional columns, cell shading and alignment."""
     if not t_model.rows:
         return
 
@@ -162,7 +188,7 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             if cell_data.bg_color_hex:
                 _set_cell_shading(target_cell, cell_data.bg_color_hex)
             elif cell_data.is_header:
-                _set_cell_shading(target_cell, "EAEAEA")
+                _set_cell_shading(target_cell, "F2F4F7")
 
     # Add spacing after table
     p_after = doc.add_paragraph()
@@ -215,7 +241,7 @@ def compile_document(doc_model: DocumentModel, output_path: str) -> str:
     normal_style.font.name = 'Calibri'
     normal_style.font.size = Pt(10.5)
     normal_style.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
-    normal_style.paragraph_format.space_after = Pt(4)
+    normal_style.paragraph_format.space_after = Pt(3)
     normal_style.paragraph_format.line_spacing = 1.15
 
     for p_idx, page in enumerate(doc_model.pages):
@@ -234,4 +260,3 @@ def compile_document(doc_model: DocumentModel, output_path: str) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     doc.save(output_path)
     return output_path
-

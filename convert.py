@@ -29,7 +29,10 @@ from core.ocr_engine import (
     run_single_pass_ocr, cluster_items_into_lines,
     clean_text_spacing, restore_currency_symbols
 )
-from core.layout_engine import analyze_page_layout
+from core.layout_engine import (
+    analyze_page_layout, recursive_xy_cut,
+    sample_text_color_from_crop
+)
 from core.table_engine import extract_table_model
 from core.docx_compiler import compile_document
 from core.preprocessor import preprocess_document_image
@@ -39,6 +42,7 @@ def process_scanned_page_to_model(
     img_np: np.ndarray,
     page_num: int,
     content_width: float = 7.0,
+    dpi: int = 150,
     deskew: bool = True,
     remove_shadows: bool = True,
     suppress_watermarks: bool = False,
@@ -49,8 +53,9 @@ def process_scanned_page_to_model(
     1. Computer Vision Preprocessing (Auto-orientation, Deskew, Shadow removal, Watermark suppression).
     2. Single-pass OCR across the entire page image.
     3. Layout analysis to detect tables, figures, headers, footers.
-    4. Neural table extraction with right-aligned numeric data.
-    5. Reading order clustering and paragraph/heading synthesis.
+    4. Neural table extraction with right-aligned numeric data & cell shading.
+    5. Recursive XY-Cut multi-column & reading order decomposition.
+    6. Dynamic typography point scaling & RGB ink stroke color sampling.
     """
     # 1. Computer Vision Preprocessing
     img_np, prep_meta = preprocess_document_image(
@@ -108,8 +113,8 @@ def process_scanned_page_to_model(
             t_model.bbox = (x1, y1, x2, y2)
             tables_data.append({
                 'type': 'table',
-                'y0': y1,
-                'y1': y2,
+                'x0': x1, 'y0': y1,
+                'x1': x2, 'y1': y2,
                 'model': t_model
             })
 
@@ -129,7 +134,7 @@ def process_scanned_page_to_model(
             'score': score
         })
 
-    # 6. Cluster text items into lines
+    # 6. Cluster text items into lines and sample ink stroke colors
     lines = cluster_items_into_lines(non_table_items)
     text_line_blocks = []
     for l in lines:
@@ -137,53 +142,103 @@ def process_scanned_page_to_model(
         if line_str:
             line_y0 = min(i['y0'] for i in l)
             line_y1 = max(i['y1'] for i in l)
+            line_x0 = min(i['x0'] for i in l)
+            line_x1 = max(i['x1'] for i in l)
+            line_h = max(i['height'] for i in l)
+
+            # Sample ink stroke color from pixels under bounding box
+            cy0, cy1 = max(0, int(line_y0)), min(h, int(line_y1))
+            cx0, cx1 = max(0, int(line_x0)), min(w, int(line_x1))
+            line_color = None
+            if cy1 > cy0 and cx1 > cx0:
+                line_color = sample_text_color_from_crop(img_np[cy0:cy1, cx0:cx1])
+
             text_line_blocks.append({
                 'type': 'text',
+                'x0': line_x0,
                 'y0': line_y0,
+                'x1': line_x1,
                 'y1': line_y1,
-                'content': line_str
+                'height': line_h,
+                'content': line_str,
+                'color_hex': line_color
             })
 
-    # 7. Merge text lines and tables by vertical y0 coordinate
-    all_elements = text_line_blocks + tables_data
-    all_elements.sort(key=lambda el: el['y0'])
+    # Calculate median line height of normal body lines on the page
+    valid_heights = [b['height'] for b in text_line_blocks if 12 <= b['height'] <= 60]
+    median_h = float(np.median(valid_heights)) if valid_heights else 26.0
 
-    # 8. Build Paragraph and Table models
-    curr_para_lines = []
+    # 7. Recursive XY-Cut: Natural reading order across columns, tables, and bands
+    all_elements = recursive_xy_cut(
+        text_line_blocks + tables_data,
+        x_thresh=35.0,
+        y_thresh=18.0,
+        page_width=w
+    )
+
+    # 8. Build Paragraph and Table models with dynamic typography & color
+    curr_para_lines: List[str] = []
+    curr_para_colors: List[Optional[str]] = []
+    curr_para_heights: List[float] = []
     prev_y1 = None
     prev_text = ""
 
     def flush_paragraph():
-        nonlocal curr_para_lines
+        nonlocal curr_para_lines, curr_para_colors, curr_para_heights
         if not curr_para_lines:
             return
         full_text = ' '.join(curr_para_lines).strip()
+        para_colors = list(curr_para_colors)
+        para_heights = list(curr_para_heights)
+
         curr_para_lines = []
+        curr_para_colors = []
+        curr_para_heights = []
+
         if not full_text:
             return
 
         cleaned_text = clean_text_spacing(restore_currency_symbols(full_text))
+        max_h = max(para_heights) if para_heights else median_h
+        raw_pt = (max_h / float(dpi)) * 72.0 * 0.95
+        color = next((c for c in para_colors if c), None)
 
-        # Check for Heading hierarchy
-        if re.search(r'^(?:CHAPTER\s*-\s*\d+|PART\s*-\s*[IVXLCDM\d]+)', cleaned_text, re.IGNORECASE):
+        # Typography Point Scaling & Hierarchy
+        is_chapter = bool(re.search(r'^(?:CHAPTER\s*-\s*\d+|PART\s*-\s*[IVXLCDM\d]+)', cleaned_text, re.IGNORECASE))
+        is_question = bool(re.search(r'^Question\s*\d+', cleaned_text, re.IGNORECASE))
+        is_bullet = bool(re.search(r'^\((?:[0-9]{1,2}|[a-z]|[ivxlcdm]{1,4})\)\s+', cleaned_text))
+        is_major_title = (max_h >= 1.40 * median_h) and (len(cleaned_text) < 80) and not cleaned_text.endswith('.')
+        is_section_head = (max_h >= 1.20 * median_h) and (len(cleaned_text) < 60) and not cleaned_text.endswith('.')
+
+        if is_chapter or is_major_title:
             p = page_model.add_paragraph(style="Heading 1")
-            p.add_run(cleaned_text, font_size_pt=16.0, is_bold=True)
-        elif re.search(r'^Question\s*\d+', cleaned_text, re.IGNORECASE):
+            pt_size = round(max(16.0, min(22.0, raw_pt)), 1)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color)
+        elif is_section_head:
+            p = page_model.add_paragraph(style="Heading 2")
+            pt_size = round(max(13.0, min(15.5, raw_pt)), 1)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color)
+        elif is_question:
             p = page_model.add_paragraph(style="Heading 3")
-            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True)
+            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True, color_hex=color)
         elif cleaned_text.strip() == "Answer" or cleaned_text.startswith("Answer\n"):
             p = page_model.add_paragraph(style="Normal")
-            p.add_run("Answer", font_size_pt=11.0, is_bold=True)
+            p.add_run("Answer", font_size_pt=11.0, is_bold=True, color_hex=color)
             rem = cleaned_text[len("Answer"):].strip()
             if rem:
                 p2 = page_model.add_paragraph(style="Normal")
-                p2.add_run(rem, font_size_pt=10.5)
-        elif re.search(r'^\((?:[0-9]{1,2}|[a-z]|[ivxlcdm]{1,4})\)\s+', cleaned_text):
+                p2.add_run(rem, font_size_pt=10.5, color_hex=color)
+        elif is_bullet:
             p = page_model.add_paragraph(style="List Bullet")
-            p.add_run(cleaned_text, font_size_pt=10.5)
+            p.add_run(cleaned_text, font_size_pt=10.5, color_hex=color)
         else:
             p = page_model.add_paragraph(style="Normal")
-            p.add_run(cleaned_text, font_size_pt=10.5)
+            # If fine print / footer / header
+            if max_h <= 0.85 * median_h:
+                pt_size = round(max(8.5, min(9.5, raw_pt)), 1)
+            else:
+                pt_size = 10.5
+            p.add_run(cleaned_text, font_size_pt=pt_size, color_hex=color)
 
     for el in all_elements:
         if el['type'] == 'table':
@@ -194,6 +249,8 @@ def process_scanned_page_to_model(
         else:
             raw_text = el['content']
             y0, y1 = el['y0'], el['y1']
+            col = el.get('color_hex')
+            h_line = el.get('height', median_h)
 
             is_header = (y0 < h * 0.08) or (bool(re.search(r'^(?:ACI\b|CHAPTER|PART\s*-|AS\s*\d+:)', raw_text)) and y0 < h * 0.15)
             is_footer = (y1 > h * 0.91) or bool(re.search(r'Page \d+\.\d+|BY.*AGARWAL', raw_text))
@@ -205,6 +262,8 @@ def process_scanned_page_to_model(
                 flush_paragraph()
 
             curr_para_lines.append(raw_text)
+            curr_para_colors.append(col)
+            curr_para_heights.append(h_line)
             prev_y1 = y1
             prev_text = raw_text.strip()
 
@@ -228,6 +287,7 @@ def _worker_page_job(args: Tuple[str, int, int, float, bool, bool, bool, bool]) 
         img_np,
         page_num=page_idx + 1,
         content_width=content_width,
+        dpi=dpi,
         deskew=deskew,
         remove_shadows=remove_shadows,
         suppress_watermarks=suppress_watermarks,
@@ -294,6 +354,7 @@ def convert_document(
             img_rgb,
             page_num=1,
             content_width=content_width,
+            dpi=dpi,
             deskew=deskew,
             remove_shadows=remove_shadows,
             suppress_watermarks=suppress_watermarks,

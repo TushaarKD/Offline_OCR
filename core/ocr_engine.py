@@ -92,8 +92,11 @@ def restore_currency_symbols(text: str) -> str:
     return re.sub(r'(?:\?|？)\s*(\d+(?:,\d+)*(?:\.\d+)?)', r'₹ \1', text)
 
 
-def cluster_items_into_lines(items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    """Group OCR text items into lines based on vertical overlap, sorting left-to-right."""
+def cluster_items_into_lines(items: List[Dict[str, Any]], max_h_gap: float = 65.0) -> List[List[Dict[str, Any]]]:
+    """
+    Group OCR text items into lines based on vertical overlap,
+    respecting horizontal column boundaries so adjacent columns are never merged.
+    """
     if not items:
         return []
 
@@ -108,9 +111,19 @@ def cluster_items_into_lines(items: List[Dict[str, Any]]) -> List[List[Dict[str,
             line_h = line_y1 - line_y0
             overlap = min(item['y1'], line_y1) - max(item['y0'], line_y0)
             if overlap > 0.45 * min(item['height'], line_h):
-                line.append(item)
-                placed = True
-                break
+                line_x0 = min(i['x0'] for i in line)
+                line_x1 = max(i['x1'] for i in line)
+                if item['x0'] >= line_x1:
+                    h_gap = item['x0'] - line_x1
+                elif item['x1'] <= line_x0:
+                    h_gap = line_x0 - item['x1']
+                else:
+                    h_gap = 0.0
+
+                if h_gap < max_h_gap:
+                    line.append(item)
+                    placed = True
+                    break
         if not placed:
             lines.append([item])
 

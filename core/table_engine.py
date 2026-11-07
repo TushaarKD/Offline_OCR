@@ -1,15 +1,17 @@
 """
 table_engine.py - Neural Table Structure Extraction & Modeling
-Extracts 2D cell matrices, spans, and alignments from table image crops into TableModel.
+Extracts 2D cell matrices, spans, alignments, and background shading from table image crops into TableModel.
 """
 
 from typing import List, Tuple, Dict, Any, Optional
 import re
 import numpy as np
+import cv2
 from bs4 import BeautifulSoup
 
 from core.document_ir import TableModel, TableCellModel
 from core.ocr_engine import clean_text_spacing, restore_currency_symbols
+from core.layout_engine import sample_cell_background_color
 
 _table_instance = None
 
@@ -37,8 +39,13 @@ def _detect_cell_alignment(text: str, is_header: bool) -> str:
     return "LEFT"
 
 
-def parse_html_table_to_model(html_str: str, page_content_width: float = 7.0) -> Optional[TableModel]:
-    """Parse HTML table into a structured TableModel."""
+def parse_html_table_to_model(
+    html_str: str,
+    crop_img: Optional[np.ndarray] = None,
+    cell_bboxes: Optional[List[Any]] = None,
+    page_content_width: float = 7.0
+) -> Optional[TableModel]:
+    """Parse HTML table and cell bounding boxes into a structured TableModel."""
     soup = BeautifulSoup(html_str, 'html.parser')
     table_soup = soup.find('table')
     if not table_soup:
@@ -53,6 +60,7 @@ def parse_html_table_to_model(html_str: str, page_content_width: float = 7.0) ->
     cell_records: List[Dict[str, Any]] = []
     max_c = 0
     max_r = len(raw_rows)
+    cell_idx = 0
 
     for r_idx, tr in enumerate(raw_rows):
         curr_c = 0
@@ -67,13 +75,35 @@ def parse_html_table_to_model(html_str: str, page_content_width: float = 7.0) ->
             cleaned_t = clean_text_spacing(restore_currency_symbols(raw_t))
             align = _detect_cell_alignment(cleaned_t, is_hdr)
 
+            # Sample cell background shading if crop and cell_bboxes are available
+            bg_color = None
+            if crop_img is not None and cell_bboxes is not None and len(cell_bboxes) > 0 and cell_idx < len(cell_bboxes):
+                b = cell_bboxes[cell_idx]
+                if len(b) >= 4:
+                    if len(b) == 8:
+                        xs = [b[0], b[2], b[4], b[6]]
+                        ys = [b[1], b[3], b[5], b[7]]
+                    else:
+                        xs = [b[0], b[2]]
+                        ys = [b[1], b[3]]
+                    bx0, by0 = max(0, int(min(xs))), max(0, int(min(ys)))
+                    bx1, by1 = min(crop_img.shape[1], int(max(xs))), min(crop_img.shape[0], int(max(ys)))
+                    if bx1 > bx0 and by1 > by0:
+                        cell_crop = crop_img[by0:by1, bx0:bx1]
+                        bg_color = sample_cell_background_color(cell_crop)
+
+            if bg_color is None and is_hdr:
+                bg_color = "F2F4F7"
+
             cell_records.append({
                 'r': r_idx, 'c': curr_c,
                 'rs': rs, 'cs': cs,
                 'text': cleaned_t,
                 'is_hdr': is_hdr,
-                'alignment': align
+                'alignment': align,
+                'bg_color': bg_color
             })
+            cell_idx += 1
 
             for dr in range(rs):
                 for dc in range(cs):
@@ -100,6 +130,7 @@ def parse_html_table_to_model(html_str: str, page_content_width: float = 7.0) ->
         cell.colspan = rec['cs']
         cell.is_header = rec['is_hdr']
         cell.alignment = rec['alignment']
+        cell.bg_color_hex = rec['bg_color']
 
     # Calculate proportional column widths
     col_lens = [3.0] * max_c
@@ -137,8 +168,13 @@ def extract_table_model(crop_img: np.ndarray,
 
         if out and out.pred_htmls:
             html = out.pred_htmls[0]
-            return parse_html_table_to_model(html, page_content_width=page_content_width)
+            cell_boxes = out.cell_bboxes[0] if (out.cell_bboxes and len(out.cell_bboxes) > 0) else None
+            return parse_html_table_to_model(
+                html,
+                crop_img=crop_img,
+                cell_bboxes=cell_boxes,
+                page_content_width=page_content_width
+            )
     except Exception:
         pass
     return None
-

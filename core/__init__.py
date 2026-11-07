@@ -4,7 +4,7 @@ Core package for High-Fidelity Document Processing & Conversion.
 
 from .document_ir import DocumentModel, PageModel, ParagraphModel, TableModel, TableCellModel, FigureModel, RunModel
 from .ocr_engine import run_single_pass_ocr, cluster_items_into_lines, clean_text_spacing, restore_currency_symbols
-from .layout_engine import analyze_page_layout
+from .layout_engine import analyze_page_layout, recursive_xy_cut, sample_text_color_from_crop, sample_cell_background_color
 from .table_engine import extract_table_model
 from .docx_compiler import compile_document
 from .preprocessor import (
