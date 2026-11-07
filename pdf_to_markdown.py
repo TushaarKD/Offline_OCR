@@ -97,6 +97,72 @@ def html_to_markdown_table(html_str: str) -> str:
     return '\n'.join(md_lines)
 
 
+def clean_text_spacing(text: str) -> str:
+    """
+    Fix missing spaces caused by OCR CTC decoding without altering any text/numbers:
+    - Punctuation-letter collisions: 'words,words' -> 'words, words'
+    - Number-letter collisions: 'Paid50,000tocreditors' -> 'Paid 50,000 to creditors'
+    - Glued CamelCase and concatenated English words: 'aretheissues' -> 'are the issues'
+    - Protects URLs, emails, dates, decimals, acronyms, and alphanumeric codes.
+    """
+    # Protect URLs, emails, and specific domains
+    url_map = {}
+    def save_url(m):
+        key = f"___URL_{len(url_map)}___"
+        url_map[key] = m.group(0)
+        return key
+
+    text = re.sub(r'https?://\S+|www\.\S+|\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b|\b(?:air1ca\.com|air1ca)\b', save_url, text)
+
+    # Punctuation spacing: comma, semicolon, colon, exclamation followed directly by letter
+    text = re.sub(r'([a-zA-Z0-9\)])([,;:!])([a-zA-Z])', r'\1\2 \3', text)
+    # Period followed by Capital Letter: 'statement.The' -> 'statement. The'
+    text = re.sub(r'([a-zA-Z]{2,}\.)([A-Z])', r'\1 \2', text)
+
+    # Number-Letter boundary separation (protecting short codes like AS1, 20X1)
+    text = re.sub(r'([a-zA-Z]{2,})(\d{2,})', r'\1 \2', text)
+    text = re.sub(r'(\d+(?:,\d+)*(?:\.\d+)?)([a-zA-Z]{2,})', r'\1 \2', text)
+
+    # Clean run-together / glued English words
+    try:
+        import wordninja
+
+        def fix_word(match):
+            w = match.group(0)
+            if len(w) <= 4 or (w.isupper() and len(w) <= 6):
+                return w
+            # CamelCase: 'MeaningofAS', 'RentOutstanding', 'SettlementofCreditors'
+            if re.search(r'[a-z]{2,}[A-Z]', w):
+                splits = wordninja.split(w)
+                if len(splits) > 1:
+                    res, idx = [], 0
+                    for s in splits:
+                        slen = len(s)
+                        res.append(w[idx:idx+slen])
+                        idx += slen
+                    if idx < len(w):
+                        res.append(w[idx:])
+                    return ' '.join(res)
+            # Long run-together lowercase words: 'aretheissues', 'theliabilitiesinthenormalcourseofbusiness'
+            elif len(w) > 7 and w.islower():
+                splits = wordninja.split(w)
+                if len(splits) > 1 and all(len(s) >= 2 for s in splits):
+                    return ' '.join(splits)
+            return w
+
+        text = re.sub(r'\b[a-zA-Z]+\b', fix_word, text)
+    except ImportError:
+        pass
+
+    # Restore URLs/emails
+    for key, val in url_map.items():
+        text = text.replace(key, val)
+
+    # Normalize excessive spaces
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    return text
+
+
 def restore_currency_symbols(text: str) -> str:
     """
     Restore Indian Rupee symbol (₹) where OCR reads '?' preceding numeric amounts,
@@ -108,12 +174,14 @@ def restore_currency_symbols(text: str) -> str:
 def format_text_block(text: str) -> str:
     """
     Apply structured Markdown formatting to text:
+    - Clean and normalize word and punctuation spacing
     - Normalize and format Question numbers into sub-headings
     - Bold 'Answer' labels
     - Format Chapter/Part titles
     - Format enumerated sub-points into clean list items
     - Restore currency symbols
     """
+    text = clean_text_spacing(text)
     text = restore_currency_symbols(text)
 
     # Normalize QuestionX -> Question X
@@ -272,17 +340,30 @@ def process_scanned_page(img_np: np.ndarray, page_idx: int) -> str:
     # Step 7: Build markdown page content
     output_parts = []
     prev_y1 = None
+    prev_text = ""
 
     for el in all_elements:
         if el['type'] == 'table':
             output_parts.append('\n\n' + el['content'] + '\n\n')
             prev_y1 = el['y1']
+            prev_text = ""
         else:
             raw_text = el['content']
             y0 = el['y0']
+            y1 = el['y1']
+
+            # Check if line is a page header or footer
+            is_header = (y0 < h * 0.08) or (bool(re.search(r'^(?:ACI\b|CHAPTER|PART\s*-|AS\s*\d+:)', raw_text)) and y0 < h * 0.15)
+            is_footer = (y1 > h * 0.91) or bool(re.search(r'Page \d+\.\d+|BY.*AGARWAL', raw_text))
 
             # Determine paragraph break
-            if prev_y1 is not None and (y0 - prev_y1) > 26:
+            if (
+                is_header
+                or is_footer
+                or (prev_y1 is not None and (y0 - prev_y1) > 22)
+                or (prev_text.endswith(('.', ':', '?')) and (y0 - prev_y1) > 12)
+                or raw_text.startswith(('Question', 'Answer', '(', '-'))
+            ):
                 output_parts.append('\n\n' + raw_text)
             else:
                 # Continuation or space
@@ -291,7 +372,8 @@ def process_scanned_page(img_np: np.ndarray, page_idx: int) -> str:
                 else:
                     output_parts.append(raw_text)
 
-            prev_y1 = el['y1']
+            prev_y1 = y1
+            prev_text = raw_text.strip()
 
     raw_page_md = ''.join(output_parts).strip()
     page_md = format_text_block(raw_page_md)
