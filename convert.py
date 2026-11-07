@@ -3,8 +3,12 @@ convert.py - Unified Document Conversion CLI & Orchestrator
 Converts scanned/vectorized PDFs and document images into 100% editable Microsoft Word (.docx) documents
 and clean Markdown (.md) using the unified Document IR architecture.
 
+Supported Inputs:
+    - PDF documents (.pdf)
+    - High-resolution scans and photos (.png, .jpg, .jpeg, .tiff, .tif, .bmp, .webp)
+
 Usage:
-    python convert.py <input.pdf> [-o output.docx] [--markdown output.md] [--workers 4] [--dpi 150]
+    python convert.py <input.pdf|image.jpg> [-o output.docx] [--markdown output.md] [--workers 4] [--dpi 150]
 """
 
 import os
@@ -15,6 +19,7 @@ import re
 from typing import List, Dict, Any, Tuple, Optional
 import pymupdf
 import numpy as np
+import cv2
 
 from core.document_ir import (
     DocumentModel, PageModel, ParagraphModel, TableModel,
@@ -27,27 +32,55 @@ from core.ocr_engine import (
 from core.layout_engine import analyze_page_layout
 from core.table_engine import extract_table_model
 from core.docx_compiler import compile_document
+from core.preprocessor import preprocess_document_image
 
 
-def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_width: float = 7.0) -> PageModel:
+def process_scanned_page_to_model(
+    img_np: np.ndarray,
+    page_num: int,
+    content_width: float = 7.0,
+    deskew: bool = True,
+    remove_shadows: bool = True,
+    suppress_watermarks: bool = False,
+    fix_orientation: bool = True
+) -> PageModel:
     """
-    Processes a single page image and returns a fully populated PageModel.
-    1. Single-pass OCR across the entire page image.
-    2. Layout analysis to detect tables, figures, headers, footers.
-    3. Neural table extraction with right-aligned numeric data.
-    4. Reading order clustering and paragraph/heading synthesis.
+    Processes a single page image and returns a fully populated PageModel:
+    1. Computer Vision Preprocessing (Auto-orientation, Deskew, Shadow removal, Watermark suppression).
+    2. Single-pass OCR across the entire page image.
+    3. Layout analysis to detect tables, figures, headers, footers.
+    4. Neural table extraction with right-aligned numeric data.
+    5. Reading order clustering and paragraph/heading synthesis.
     """
+    # 1. Computer Vision Preprocessing
+    img_np, prep_meta = preprocess_document_image(
+        img_np,
+        fix_orientation=fix_orientation,
+        deskew=deskew,
+        remove_shadows=remove_shadows,
+        suppress_watermarks=suppress_watermarks
+    )
+    if (prep_meta['rotation_applied_deg'] != 0 or
+        abs(prep_meta['deskew_angle']) > 0 or
+        prep_meta['shadows_removed'] or
+        prep_meta['watermarks_suppressed']):
+        print(f"  [Page {page_num:2d} Preprocessing] "
+              f"rot={prep_meta['rotation_applied_deg']}° | "
+              f"deskew={prep_meta['deskew_angle']:+.2f}° | "
+              f"shadow_cleaned={prep_meta['shadows_removed']} | "
+              f"watermark_suppressed={prep_meta['watermarks_suppressed']}")
+
     h, w = img_np.shape[:2]
     page_model = PageModel(page_num=page_num, width_inches=8.5, height_inches=11.0)
 
-    # 1. Single-pass OCR
+    # 2. Single-pass OCR
     raw_ocr = run_single_pass_ocr(img_np)
 
-    # 2. Layout Analysis
+    # 3. Layout Analysis
     layout_dict = analyze_page_layout(img_np)
     table_boxes = layout_dict.get('table', [])
 
-    # 3. Extract Tables
+    # 4. Extract Tables
     tables_data: List[Dict[str, Any]] = []
     table_assigned_indices = set()
 
@@ -80,7 +113,7 @@ def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_wid
                 'model': t_model
             })
 
-    # 4. Collect non-table text items
+    # 5. Collect non-table text items
     non_table_items = []
     for idx, (box, text, score) in enumerate(raw_ocr):
         if idx in table_assigned_indices:
@@ -96,7 +129,7 @@ def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_wid
             'score': score
         })
 
-    # 5. Cluster text items into lines
+    # 6. Cluster text items into lines
     lines = cluster_items_into_lines(non_table_items)
     text_line_blocks = []
     for l in lines:
@@ -111,11 +144,11 @@ def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_wid
                 'content': line_str
             })
 
-    # 6. Merge text lines and tables by vertical y0 coordinate
+    # 7. Merge text lines and tables by vertical y0 coordinate
     all_elements = text_line_blocks + tables_data
     all_elements.sort(key=lambda el: el['y0'])
 
-    # 7. Build Paragraph and Table models
+    # 8. Build Paragraph and Table models
     curr_para_lines = []
     prev_y1 = None
     prev_text = ""
@@ -150,7 +183,6 @@ def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_wid
             p.add_run(cleaned_text, font_size_pt=10.5)
         else:
             p = page_model.add_paragraph(style="Normal")
-            # Parse inline formatting if any
             p.add_run(cleaned_text, font_size_pt=10.5)
 
     for el in all_elements:
@@ -180,9 +212,9 @@ def process_scanned_page_to_model(img_np: np.ndarray, page_num: int, content_wid
     return page_model
 
 
-def _worker_page_job(args: Tuple[str, int, int, float]) -> Tuple[int, PageModel]:
+def _worker_page_job(args: Tuple[str, int, int, float, bool, bool, bool, bool]) -> Tuple[int, PageModel]:
     """Process a single PDF page inside a ProcessPoolExecutor worker."""
-    pdf_path, page_idx, dpi, content_width = args
+    pdf_path, page_idx, dpi, content_width, deskew, remove_shadows, suppress_watermarks, fix_orientation = args
     doc = pymupdf.open(pdf_path)
     page = doc[page_idx]
 
@@ -190,8 +222,17 @@ def _worker_page_job(args: Tuple[str, int, int, float]) -> Tuple[int, PageModel]
     img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.h, pix.w, pix.n))
     if pix.n == 4:
         img_np = img_np[:, :, :3]
+    doc.close()
 
-    page_model = process_scanned_page_to_model(img_np, page_num=page_idx + 1, content_width=content_width)
+    page_model = process_scanned_page_to_model(
+        img_np,
+        page_num=page_idx + 1,
+        content_width=content_width,
+        deskew=deskew,
+        remove_shadows=remove_shadows,
+        suppress_watermarks=suppress_watermarks,
+        fix_orientation=fix_orientation
+    )
     return page_idx, page_model
 
 
@@ -202,68 +243,109 @@ def convert_document(
     dpi: int = 150,
     max_workers: int = 4,
     start_page: int = 1,
-    end_page: Optional[int] = None
+    end_page: Optional[int] = None,
+    deskew: bool = True,
+    remove_shadows: bool = True,
+    suppress_watermarks: bool = False,
+    fix_orientation: bool = True
 ) -> Tuple[str, Optional[str]]:
     """
     Unified conversion entrypoint:
     Builds the complete DocumentModel and compiles directly to .docx (and optionally .md).
+    Supports PDFs as well as standalone images (.png, .jpg, .jpeg, .tiff, .bmp, .webp).
     """
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    base, _ = os.path.splitext(input_path)
+    base, ext = os.path.splitext(input_path)
+    ext_lower = ext.lower()
     if output_docx is None:
         output_docx = f"{base}.docx"
     if output_markdown is None:
         output_markdown = f"{base}.md"
 
-    doc = pymupdf.open(input_path)
-    total_pages = len(doc)
-    doc.close()
-
-    s_idx = max(0, start_page - 1)
-    e_idx = min(total_pages, end_page) if end_page else total_pages
-    page_indices = list(range(s_idx, e_idx))
-    num_pages = len(page_indices)
+    content_width = 8.5 - 1.5  # 7.0 inches standard printable width
 
     print(f"=== Unified Document Conversion Engine ===")
-    print(f"Input:       {input_path}")
-    print(f"Output DOCX: {output_docx}")
+    print(f"Input:          {input_path}")
+    print(f"Output DOCX:    {output_docx}")
     if output_markdown:
-        print(f"Output MD:   {output_markdown}")
-    print(f"Pages:       {s_idx + 1} to {e_idx} ({num_pages} pages)")
-    print(f"Workers:     {max_workers} | DPI: {dpi}")
-    print("=" * 43)
-
-    content_width = 8.5 - 1.5  # 7.0 inches
-    tasks = [(input_path, p, dpi, content_width) for p in page_indices]
-    page_results: Dict[int, PageModel] = {}
+        print(f"Output MD:      {output_markdown}")
+    print(f"Preprocessing:  Orientation={fix_orientation} | Deskew={deskew} | Shadows={remove_shadows} | Watermarks={suppress_watermarks}")
 
     t0 = time.time()
-    if max_workers > 1 and num_pages > 1:
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            future_to_page = {executor.submit(_worker_page_job, t): t[1] for t in tasks}
-            done_count = 0
-            for future in as_completed(future_to_page):
-                p_idx, p_model = future.result()
-                page_results[p_idx] = p_model
-                done_count += 1
-                elapsed = time.time() - t0
-                avg = elapsed / done_count
-                eta = avg * (num_pages - done_count)
-                print(f"[{done_count:2d}/{num_pages}] Page {p_idx + 1:2d} completed | Elapsed: {elapsed:5.1f}s | ETA: {eta:5.1f}s")
-    else:
-        for idx, t in enumerate(tasks):
-            p_idx, p_model = _worker_page_job(t)
-            page_results[p_idx] = p_model
-            print(f"[{idx+1:2d}/{num_pages}] Page {p_idx + 1:2d} completed")
-
-    # Assemble DocumentModel in sequential page order
     doc_model = DocumentModel(title=os.path.basename(base))
-    for p in page_indices:
-        if p in page_results:
-            doc_model.pages.append(page_results[p])
+
+    # Check if input is a direct image format
+    image_extensions = {'.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}
+    if ext_lower in image_extensions:
+        print(f"Mode:           Single Document Image")
+        print("=" * 43)
+
+        # Read image safely handling unicode filepaths on Windows
+        with open(input_path, 'rb') as f:
+            bytes_data = f.read()
+        img_bgr = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        if img_bgr is None:
+            raise ValueError(f"Failed to decode image: {input_path}")
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+        page_model = process_scanned_page_to_model(
+            img_rgb,
+            page_num=1,
+            content_width=content_width,
+            deskew=deskew,
+            remove_shadows=remove_shadows,
+            suppress_watermarks=suppress_watermarks,
+            fix_orientation=fix_orientation
+        )
+        doc_model.pages.append(page_model)
+        num_pages = 1
+
+    else:
+        # PDF Document flow
+        doc = pymupdf.open(input_path)
+        total_pages = len(doc)
+        doc.close()
+
+        s_idx = max(0, start_page - 1)
+        e_idx = min(total_pages, end_page) if end_page else total_pages
+        page_indices = list(range(s_idx, e_idx))
+        num_pages = len(page_indices)
+
+        print(f"Pages:          {s_idx + 1} to {e_idx} ({num_pages} pages)")
+        print(f"Workers:        {max_workers} | Rendering DPI: {dpi}")
+        print("=" * 43)
+
+        tasks = [
+            (input_path, p, dpi, content_width, deskew, remove_shadows, suppress_watermarks, fix_orientation)
+            for p in page_indices
+        ]
+        page_results: Dict[int, PageModel] = {}
+
+        if max_workers > 1 and num_pages > 1:
+            from concurrent.futures import ProcessPoolExecutor, as_completed
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_page = {executor.submit(_worker_page_job, t): t[1] for t in tasks}
+                done_count = 0
+                for future in as_completed(future_to_page):
+                    p_idx, p_model = future.result()
+                    page_results[p_idx] = p_model
+                    done_count += 1
+                    elapsed = time.time() - t0
+                    avg = elapsed / done_count
+                    eta = avg * (num_pages - done_count)
+                    print(f"[{done_count:2d}/{num_pages}] Page {p_idx + 1:2d} completed | Elapsed: {elapsed:5.1f}s | ETA: {eta:5.1f}s")
+        else:
+            for idx, t in enumerate(tasks):
+                p_idx, p_model = _worker_page_job(t)
+                page_results[p_idx] = p_model
+                print(f"[{idx+1:2d}/{num_pages}] Page {p_idx + 1:2d} completed")
+
+        # Assemble DocumentModel in sequential page order
+        for p in page_indices:
+            if p in page_results:
+                doc_model.pages.append(page_results[p])
 
     # Direct compile to Word DOCX
     print("\nSynthesizing native flow Microsoft Word (.docx)...")
@@ -276,7 +358,7 @@ def convert_document(
 
     total_time = time.time() - t0
     print("=" * 43)
-    print(f"Done! Processed {num_pages} pages in {total_time:.2f}s ({total_time/num_pages:.2f}s/page).")
+    print(f"Done! Processed {num_pages} page(s) in {total_time:.2f}s ({total_time/max(1, num_pages):.2f}s/page).")
     print(f"DOCX saved to: {output_docx}")
     if output_markdown:
         print(f"MD   saved to: {output_markdown}")
@@ -286,13 +368,19 @@ def convert_document(
 
 def main():
     parser = argparse.ArgumentParser(description="Unified High-Fidelity Document Conversion Engine.")
-    parser.add_argument("input_path", help="Path to input PDF file (or image)")
+    parser.add_argument("input_path", help="Path to input PDF or document image (.png, .jpg, .tiff, etc.)")
     parser.add_argument("-o", "--output", help="Path to output .docx file (optional)")
     parser.add_argument("--markdown", help="Path to output .md file (optional)")
     parser.add_argument("--dpi", type=int, default=150, help="Rendering DPI for OCR (default: 150)")
     parser.add_argument("--workers", type=int, default=4, help="Parallel worker processes (default: 4)")
     parser.add_argument("--start-page", type=int, default=1, help="Start page (1-based, inclusive)")
     parser.add_argument("--end-page", type=int, default=None, help="End page (1-based, inclusive)")
+
+    # Preprocessing flags
+    parser.add_argument("--no-deskew", action="store_true", help="Disable automatic deskewing")
+    parser.add_argument("--no-shadow-removal", action="store_true", help="Disable shadow and illumination flattening")
+    parser.add_argument("--suppress-watermarks", action="store_true", help="Enable faint watermark suppression")
+    parser.add_argument("--no-orientation", action="store_true", help="Disable 360-degree orientation detection")
 
     args = parser.parse_args()
 
@@ -303,10 +391,13 @@ def main():
         dpi=args.dpi,
         max_workers=args.workers,
         start_page=args.start_page,
-        end_page=args.end_page
+        end_page=args.end_page,
+        deskew=not args.no_deskew,
+        remove_shadows=not args.no_shadow_removal,
+        suppress_watermarks=args.suppress_watermarks,
+        fix_orientation=not args.no_orientation
     )
 
 
 if __name__ == "__main__":
     main()
-
