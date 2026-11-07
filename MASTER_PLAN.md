@@ -124,20 +124,27 @@ D:\Work_dsi\2026\OCR_Setup\
 
 ---
 
-### Phase 4: Commercial-Grade Table Engine & High-Res Figure Embeds
+### Phase 4: Commercial-Grade Table Engine & High-Res Figure Embeds [COMPLETED & VERIFIED]
 * **Objective**: Perfect financial tables, ledgers, balance sheets, and embedded visual illustrations.
-* **Tasks**:
+* **Tasks Completed**:
   1. **Accounting Data-Type Alignment**:
-     - Numeric balances, currencies, percentages $\rightarrow$ **Right-Aligned**.
-     - Descriptions (`Particulars`, `Transactions`) $\rightarrow$ **Left-Aligned**.
-     - Codes, dates, mathematical operators ($=, -$) $\rightarrow$ **Centered**.
-  2. **Cell Shading & Border Styles**:
-     - Sample cell background colors to replicate grey/colored header fills (`w:shd`).
-     - Detect borderless tables (whitespace alignment) vs bordered grid tables.
+     - Numeric balances, currencies, percentages $\rightarrow$ **Right-Aligned** (`w:jc="right"`).
+     - Descriptions (`Particulars`, `Transactions`) $\rightarrow$ **Left-Aligned** (`w:jc="left"`).
+     - Codes, dates, mathematical operators ($=, -$) $\rightarrow$ **Centered** (`w:jc="center"`).
+     - Implemented in [`_detect_cell_alignment`](file:///d:/Work_dsi/2026/OCR_Setup/core/table_engine.py#L51-L64) and verified on balance sheet on Page 18.
+  2. **Cell Shading, Padding & Accounting Border Styles**:
+     - Sample cell background colors to replicate header fills (`w:shd="F2F4F7"`).
+     - Set cell padding margins (`w:tcMar`: top/bottom 3pt, left/right 5pt) across all table cells in [`_set_cell_padding`](file:///d:/Work_dsi/2026/OCR_Setup/core/docx_compiler.py#L65-L88).
+     - Morphological border detection in [`detect_table_borders`](file:///d:/Work_dsi/2026/OCR_Setup/core/table_engine.py#L27-L49): Distinguishes grid tables from borderless whitespace-aligned tables.
+     - Accounting rule border styling in [`_compile_table`](file:///d:/Work_dsi/2026/OCR_Setup/core/docx_compiler.py#L149-L168): Emits clean top/bottom rules (`#B0B0B0`), subtle horizontal dividers (`#E0E0E0`), and suppresses vertical borders.
   3. **High-Res Graphic & Figure Cropping**:
-     - Detect `figure` layout regions (diagrams, logos, signatures, QR codes).
-     - Crop native image at 300 DPI and insert as centered Word pictures (`doc.add_picture`).
-* **Quality Gate**: Accounting balance sheets have right-aligned numbers that sum correctly, shaded header rows, and all logos/diagrams embedded in place.
+     - Detected `figure` layout regions (logos, cover artwork, diagrams) in [`convert.py`](file:///d:/Work_dsi/2026/OCR_Setup/convert.py#L123-L176).
+     - Cropped native image at 300 DPI, encoded to in-memory PNG bytes, and embedded directly as native Word inline shape (`WD_INLINE_SHAPE_TYPE.PICTURE`) preserving aspect ratios in [`_compile_figure`](file:///d:/Work_dsi/2026/OCR_Setup/core/docx_compiler.py#L240-L263).
+     - Added companion markdown figure export: saves figures to a dedicated `{stem}_figures/` directory with relative links.
+* **Quality Gate Verification**:
+  - Page 1 Cover Graphic: Successfully extracted cover illustration and embedded it as an inline picture shape into Word (`width=6400800`, `height=5963446`), with companion markdown referencing `test_p1_figures/page_1_fig_1.png`.
+  - Page 18 Financial Table: Successfully compiled 6-column accounting table with `#F2F4F7` shaded centered headers, right-aligned numbers (`8.00`, `3.00`, `5.00`), centered operators (`-`, `=`), left-aligned labels (`Opening`), and 3pt/5pt cell padding (`tcMar=True`).
+  - Borderless Table Detection: Verified `detect_table_borders` on grid vs borderless images; verified accounting XML rule borders (`tblBorders` top/bottom single `#B0B0B0`, insideH `#E0E0E0`, vertical none).
 
 ---
 

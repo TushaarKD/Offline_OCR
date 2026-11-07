@@ -75,6 +75,7 @@ class TableModel:
     col_widths_inches: List[float] = field(default_factory=list)
     style: str = "Table Grid"
     alignment: str = "CENTER"
+    has_borders: bool = True
     bbox: Optional[Tuple[float, float, float, float]] = None
 
     def get_cell(self, r: int, c: int) -> Optional[TableCellModel]:

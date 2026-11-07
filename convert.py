@@ -54,8 +54,9 @@ def process_scanned_page_to_model(
     2. Single-pass OCR across the entire page image.
     3. Layout analysis to detect tables, figures, headers, footers.
     4. Neural table extraction with right-aligned numeric data & cell shading.
-    5. Recursive XY-Cut multi-column & reading order decomposition.
-    6. Dynamic typography point scaling & RGB ink stroke color sampling.
+    5. High-resolution figure & graphic extraction.
+    6. Recursive XY-Cut multi-column & reading order decomposition.
+    7. Dynamic typography point scaling & RGB ink stroke color sampling.
     """
     # 1. Computer Vision Preprocessing
     img_np, prep_meta = preprocess_document_image(
@@ -84,6 +85,7 @@ def process_scanned_page_to_model(
     # 3. Layout Analysis
     layout_dict = analyze_page_layout(img_np)
     table_boxes = layout_dict.get('table', [])
+    figure_boxes = layout_dict.get('figure', [])
 
     # 4. Extract Tables
     tables_data: List[Dict[str, Any]] = []
@@ -118,10 +120,65 @@ def process_scanned_page_to_model(
                 'model': t_model
             })
 
-    # 5. Collect non-table text items
+    # 4b. Extract High-Res Figures & Illustrations
+    figures_data: List[Dict[str, Any]] = []
+    figure_assigned_indices = set()
+
+    for f_box in figure_boxes:
+        x1, y1, x2, y2 = [int(v) for v in f_box]
+        pad = 4
+        x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+        x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
+        box_w, box_h = x2 - x1, y2 - y1
+
+        # Ignore tiny noise artifacts (< 35px)
+        if box_w < 35 or box_h < 35:
+            continue
+
+        crop = img_np[y1:y2, x1:x2]
+        success, png_buf = cv2.imencode('.png', cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+        if not success:
+            continue
+        png_bytes = png_buf.tobytes()
+
+        # Display dimensions preserving aspect ratio
+        raw_w_in = box_w / float(dpi)
+        raw_h_in = box_h / float(dpi)
+        if raw_w_in > content_width:
+            scale_f = content_width / raw_w_in
+            w_in = content_width
+            h_in = raw_h_in * scale_f
+        else:
+            w_in = raw_w_in
+            h_in = raw_h_in
+
+        fig_model = FigureModel(
+            image_bytes=png_bytes,
+            width_inches=round(w_in, 2),
+            height_inches=round(h_in, 2),
+            alignment="CENTER",
+            bbox=(x1, y1, x2, y2)
+        )
+
+        # Mark OCR tokens inside figure bounding box so text isn't duplicated
+        for idx, (dt_box, text, score) in enumerate(raw_ocr):
+            cx = sum(p[0] for p in dt_box) / 4.0
+            cy = sum(p[1] for p in dt_box) / 4.0
+            if x1 <= cx <= x2 and y1 <= cy <= y2:
+                figure_assigned_indices.add(idx)
+
+        figures_data.append({
+            'type': 'figure',
+            'x0': x1, 'y0': y1,
+            'x1': x2, 'y1': y2,
+            'model': fig_model
+        })
+
+    # 5. Collect non-table and non-figure text items
+    non_text_assigned = table_assigned_indices | figure_assigned_indices
     non_table_items = []
     for idx, (box, text, score) in enumerate(raw_ocr):
-        if idx in table_assigned_indices:
+        if idx in non_text_assigned:
             continue
         xs = [pt[0] for pt in box]
         ys = [pt[1] for pt in box]
@@ -168,15 +225,15 @@ def process_scanned_page_to_model(
     valid_heights = [b['height'] for b in text_line_blocks if 12 <= b['height'] <= 60]
     median_h = float(np.median(valid_heights)) if valid_heights else 26.0
 
-    # 7. Recursive XY-Cut: Natural reading order across columns, tables, and bands
+    # 7. Recursive XY-Cut: Natural reading order across columns, tables, figures, and bands
     all_elements = recursive_xy_cut(
-        text_line_blocks + tables_data,
+        text_line_blocks + tables_data + figures_data,
         x_thresh=35.0,
         y_thresh=18.0,
         page_width=w
     )
 
-    # 8. Build Paragraph and Table models with dynamic typography & color
+    # 8. Build Paragraph, Table, and Figure models with dynamic typography & color
     curr_para_lines: List[str] = []
     curr_para_colors: List[Optional[str]] = []
     curr_para_heights: List[float] = []
@@ -244,6 +301,11 @@ def process_scanned_page_to_model(
         if el['type'] == 'table':
             flush_paragraph()
             page_model.add_table(el['model'])
+            prev_y1 = el['y1']
+            prev_text = ""
+        elif el['type'] == 'figure':
+            flush_paragraph()
+            page_model.add_figure(el['model'])
             prev_y1 = el['y1']
             prev_text = ""
         else:
@@ -415,6 +477,21 @@ def convert_document(
     # Optional export to Markdown
     if output_markdown:
         print(f"Exporting companion Markdown (.md)...")
+        # Save figure assets so companion markdown has relative image links
+        md_dir = os.path.dirname(os.path.abspath(output_markdown)) or "."
+        base_name = os.path.splitext(os.path.basename(output_markdown))[0]
+        fig_dir = os.path.join(md_dir, f"{base_name}_figures")
+        for p in doc_model.pages:
+            f_idx = 1
+            for b in p.blocks:
+                if isinstance(b, FigureModel) and b.image_bytes and not b.crop_path:
+                    os.makedirs(fig_dir, exist_ok=True)
+                    fig_fname = f"page_{p.page_num}_fig_{f_idx}.png"
+                    fig_full_path = os.path.join(fig_dir, fig_fname)
+                    with open(fig_full_path, "wb") as f_out:
+                        f_out.write(b.image_bytes)
+                    b.crop_path = os.path.join(f"{base_name}_figures", fig_fname).replace("\\", "/")
+                    f_idx += 1
         doc_model.save_markdown(output_markdown)
 
     total_time = time.time() - t0

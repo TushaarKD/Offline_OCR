@@ -1,6 +1,6 @@
 """
 table_engine.py - Neural Table Structure Extraction & Modeling
-Extracts 2D cell matrices, spans, alignments, and background shading from table image crops into TableModel.
+Extracts 2D cell matrices, spans, alignments, border styles, and background shading from table image crops into TableModel.
 """
 
 from typing import List, Tuple, Dict, Any, Optional
@@ -22,6 +22,30 @@ def get_table_instance():
         from rapid_table import RapidTable
         _table_instance = RapidTable()
     return _table_instance
+
+
+def detect_table_borders(crop_img: np.ndarray) -> bool:
+    """
+    Detects whether a table has visible printed grid lines or is borderless (aligned via whitespace).
+    """
+    if crop_img is None or crop_img.size == 0:
+        return True
+    gray = cv2.cvtColor(crop_img, cv2.COLOR_RGB2GRAY) if len(crop_img.shape) == 3 else crop_img
+    h, w = gray.shape
+    if h < 20 or w < 20:
+        return True
+
+    bw = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3)
+    k_w = max(10, int(w * 0.15))
+    k_h = max(10, int(h * 0.15))
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_w, 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, k_h))
+
+    h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
+    v_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
+    total_line_pixels = int(np.sum(h_lines > 0) + np.sum(v_lines > 0))
+
+    return total_line_pixels > 150
 
 
 def _detect_cell_alignment(text: str, is_header: bool) -> str:
@@ -142,12 +166,15 @@ def parse_html_table_to_model(
     scale = page_content_width / sum(raw_w)
     widths = [w * scale for w in raw_w]
 
+    has_borders = detect_table_borders(crop_img) if crop_img is not None else True
+
     t_model = TableModel(
         rows=grid,
         num_rows=max_r,
         num_cols=max_c,
         col_widths_inches=widths,
-        style="Table Grid",
+        style="Table Grid" if has_borders else "Light Shading",
+        has_borders=has_borders,
         alignment="CENTER"
     )
     return t_model
@@ -168,7 +195,7 @@ def extract_table_model(crop_img: np.ndarray,
 
         if out and out.pred_htmls:
             html = out.pred_htmls[0]
-            cell_boxes = out.cell_bboxes[0] if (out.cell_bboxes and len(out.cell_bboxes) > 0) else None
+            cell_boxes = out.cell_bboxes[0] if (out.cell_bboxes is not None and len(out.cell_bboxes) > 0) else None
             return parse_html_table_to_model(
                 html,
                 crop_img=crop_img,

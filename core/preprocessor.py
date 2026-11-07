@@ -145,24 +145,23 @@ def detect_and_fix_orientation(
 
 def has_uneven_illumination(img_np: np.ndarray) -> bool:
     """
-    Checks if an image suffers from non-uniform camera lighting, corner shadows, or scanner falloff.
+    Checks if an image suffers from non-uniform camera lighting, corner shadows, or scanner falloff
+    by analyzing the 95th-percentile background paper luminance across all four corners.
     """
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if len(img_np.shape) == 3 else img_np
     h, w = gray.shape
 
-    # Sample four corner patches (5% of width/height) and center patch
-    pw, ph = max(10, int(w * 0.05)), max(10, int(h * 0.05))
-    tl = np.mean(gray[:ph, :pw])
-    tr = np.mean(gray[:ph, -pw:])
-    bl = np.mean(gray[-ph:, :pw])
-    br = np.mean(gray[-ph:, -pw:])
-    center = np.mean(gray[h//3:2*h//3, w//3:2*w//3])
+    pw, ph = max(10, int(w * 0.08)), max(10, int(h * 0.08))
+    p95_tl = float(np.percentile(gray[:ph, :pw], 95))
+    p95_tr = float(np.percentile(gray[:ph, -pw:], 95))
+    p95_bl = float(np.percentile(gray[-ph:, :pw], 95))
+    p95_br = float(np.percentile(gray[-ph:, -pw:], 95))
 
-    corner_means = [tl, tr, bl, br]
-    # If any corner is substantially darker than center or corners vary widely:
-    if min(corner_means) < 170 and center > 200:
+    corners = [p95_tl, p95_tr, p95_bl, p95_br]
+    # If any corner background paper is dark (< 185) while another is bright (> 220):
+    if min(corners) < 185 and max(corners) > 220:
         return True
-    if (max(corner_means) - min(corner_means)) > 35:
+    if (max(corners) - min(corners)) > 45:
         return True
     return False
 

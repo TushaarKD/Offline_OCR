@@ -3,11 +3,13 @@ docx_compiler.py - Direct Document IR to Microsoft Word (.docx) Flow Synthesizer
 Compiles a DocumentModel into a professional Microsoft Word document using native flow elements:
 - Built-in Headings (Heading 1, 2, 3) with dynamic point scaling and exact brand colors
 - Native List Bullets with proper indentation
-- True 2D Tables with proportional column widths, numeric right-alignment, and background shading
+- True 2D Tables with proportional column widths, numeric right-alignment, cell padding, and background shading
+- Embedded high-res Figures & Illustrations (diagrams, logos, signatures) with zero floating boxes
 - Clean page breaks, standard margins, and zero floating frames
 """
 
 import os
+import io
 from typing import Optional, Dict
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
@@ -30,6 +32,24 @@ def _set_cell_shading(cell, color_hex: str):
     shd.set(qn('w:color'), 'auto')
     shd.set(qn('w:fill'), color_hex.lstrip('#'))
     tc_pr.append(shd)
+
+
+def _set_cell_padding(cell, top_pt: float = 3.0, bottom_pt: float = 3.0,
+                      left_pt: float = 5.0, right_pt: float = 5.0):
+    """Set internal padding margins inside a table cell."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tcMar = OxmlElement('w:tcMar')
+    for side, pt_val in [
+        ('w:top', top_pt),
+        ('w:bottom', bottom_pt),
+        ('w:left', left_pt),
+        ('w:right', right_pt)
+    ]:
+        node = OxmlElement(side)
+        node.set(qn('w:w'), str(int(pt_val * 20)))  # 1 pt = 20 dxa
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
+    tc_pr.append(tcMar)
 
 
 def _apply_alignment(paragraph, alignment_str: str):
@@ -113,7 +133,7 @@ def _compile_paragraph(doc: Document, p_model: ParagraphModel):
 
 
 def _compile_table(doc: Document, t_model: TableModel, page_content_width: float = 7.0):
-    """Compile TableModel to a native Word table with proportional columns, cell shading and alignment."""
+    """Compile TableModel to a native Word table with proportional columns, cell shading, padding and alignment."""
     if not t_model.rows:
         return
 
@@ -125,6 +145,26 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
     table = doc.add_table(rows=num_rows, cols=num_cols)
     table.style = t_model.style or "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Accounting border styling for borderless / light tables
+    if not t_model.has_borders:
+        tblPr = table._tbl.tblPr
+        tblBorders = OxmlElement('w:tblBorders')
+        for side, val, sz, col in [
+            ('w:top', 'single', '6', 'B0B0B0'),
+            ('w:bottom', 'single', '6', 'B0B0B0'),
+            ('w:insideH', 'single', '4', 'E0E0E0'),
+            ('w:left', 'none', '0', 'auto'),
+            ('w:right', 'none', '0', 'auto'),
+            ('w:insideV', 'none', '0', 'auto')
+        ]:
+            b = OxmlElement(side)
+            b.set(qn('w:val'), val)
+            b.set(qn('w:sz'), sz)
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), col)
+            tblBorders.append(b)
+        tblPr.append(tblBorders)
 
     # Determine column widths
     if t_model.col_widths_inches and len(t_model.col_widths_inches) == num_cols:
@@ -173,6 +213,7 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             p.paragraph_format.line_spacing = 1.05
 
             _apply_alignment(p, cell_data.alignment)
+            _set_cell_padding(target_cell, top_pt=3.0, bottom_pt=3.0, left_pt=5.0, right_pt=5.0)
 
             # Add runs
             if cell_data.runs:
@@ -198,22 +239,26 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
 
 def _compile_figure(doc: Document, fig_model: FigureModel, page_content_width: float = 7.0):
     """Compile FigureModel to an embedded Word picture."""
-    if fig_model.crop_path and os.path.exists(fig_model.crop_path):
-        w = min(fig_model.width_inches, page_content_width)
-        p = doc.add_paragraph()
-        _apply_alignment(p, fig_model.alignment)
-        p.paragraph_format.space_before = Pt(4)
-        p.paragraph_format.space_after = Pt(4)
-        run = p.add_run()
+    w = min(fig_model.width_inches, page_content_width)
+    p = doc.add_paragraph()
+    _apply_alignment(p, fig_model.alignment)
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after = Pt(6)
+    run = p.add_run()
+
+    if fig_model.image_bytes:
+        stream = io.BytesIO(fig_model.image_bytes)
+        run.add_picture(stream, width=Inches(w))
+    elif fig_model.crop_path and os.path.exists(fig_model.crop_path):
         run.add_picture(fig_model.crop_path, width=Inches(w))
 
-        if fig_model.caption:
-            p_cap = doc.add_paragraph(style="Normal")
-            _apply_alignment(p_cap, "CENTER")
-            p_cap.paragraph_format.space_after = Pt(4)
-            r_cap = p_cap.add_run(fig_model.caption)
-            r_cap.italic = True
-            r_cap.font.size = Pt(9.0)
+    if fig_model.caption:
+        p_cap = doc.add_paragraph(style="Normal")
+        _apply_alignment(p_cap, "CENTER")
+        p_cap.paragraph_format.space_after = Pt(4)
+        r_cap = p_cap.add_run(fig_model.caption)
+        r_cap.italic = True
+        r_cap.font.size = Pt(9.0)
 
 
 def compile_document(doc_model: DocumentModel, output_path: str) -> str:
