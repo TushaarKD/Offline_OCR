@@ -1,5 +1,7 @@
 # MASTER PLAN: Commercial-Grade Scanned PDF/Image to Editable DOCX Engine
 
+# Critical: If anywhere you found we are drifting away, unable to achieve goals or getting bottlenecked then let the user know about it. 
+
 > **Project North Star**:  
 > To produce a **100% accurate, fully editable Microsoft Word (`.docx`) document** from any scanned PDF, photo, or document image. The output must visually look as if the source PDF was directly exported from Microsoft Word, while remaining completely reflowable and natively editable (adding text, modifying tables, or changing layouts will never break or overlap content).
 
