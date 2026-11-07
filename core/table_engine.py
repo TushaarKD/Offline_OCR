@@ -13,15 +13,9 @@ from core.document_ir import TableModel, TableCellModel
 from core.ocr_engine import clean_text_spacing, restore_currency_symbols
 from core.layout_engine import sample_cell_background_color
 
-_table_instance = None
-
-
 def get_table_instance():
-    global _table_instance
-    if _table_instance is None:
-        from rapid_table import RapidTable
-        _table_instance = RapidTable()
-    return _table_instance
+    from core.model_manager import get_table_engine
+    return get_table_engine()
 
 
 def detect_table_borders(crop_img: np.ndarray) -> bool:

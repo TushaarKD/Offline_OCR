@@ -8,15 +8,9 @@ from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 import cv2
 
-_layout_instance = None
-
-
 def get_layout_instance():
-    global _layout_instance
-    if _layout_instance is None:
-        from rapid_layout import RapidLayout
-        _layout_instance = RapidLayout()
-    return _layout_instance
+    from core.model_manager import get_layout_engine
+    return get_layout_engine()
 
 
 def analyze_page_layout(img_np: np.ndarray) -> Dict[str, List[List[float]]]:

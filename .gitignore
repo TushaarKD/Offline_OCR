@@ -11,6 +11,11 @@ __pycache__/
 # Large Archives
 *.zip
 
+# Build and Distribution
+dist/
+build/
+*.spec
+
 # Temporary files
 *.tmp
 .DS_Store

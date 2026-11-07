@@ -7,16 +7,9 @@ import re
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 
-# Lazy OCR instance
-_ocr_instance = None
-
-
 def get_ocr_instance():
-    global _ocr_instance
-    if _ocr_instance is None:
-        from rapidocr_onnxruntime import RapidOCR
-        _ocr_instance = RapidOCR()
-    return _ocr_instance
+    from core.model_manager import get_ocr_engine
+    return get_ocr_engine()
 
 
 def clean_text_spacing(text: str) -> str:
