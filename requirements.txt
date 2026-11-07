@@ -1,0 +1,25 @@
+# Core PDF Processing & Layout Extraction
+pymupdf>=2.1.0
+pymupdf4llm>=2.1.0
+
+# Neural OCR & Structure Recognition
+rapidocr-onnxruntime>=1.4.4
+rapid-layout>=1.2.1
+rapid_table>=3.0.2
+onnxruntime>=1.21.0
+opencv-python>=4.5.1.48
+
+# Document Processing & Parsing
+python-docx>=1.2.0
+beautifulsoup4>=4.15.0
+lxml>=6.1.0
+
+# Numerical, Image & Utility Dependencies
+numpy>=2.0.0
+Pillow>=13.0.0
+tqdm>=4.70.0
+PyYAML>=6.0.0
+tabulate>=0.10.0
+shapely>=2.2.0
+pyclipper>=1.4.0
+

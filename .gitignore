@@ -1,0 +1,18 @@
+# Virtual Environments
+venv/
+.venv/
+docx/.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large Archives
+*.zip
+
+# Temporary files
+*.tmp
+.DS_Store
+Thumbs.db
+
