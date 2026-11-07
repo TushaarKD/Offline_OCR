@@ -19,6 +19,8 @@ class RunModel:
     is_italic: bool = False
     is_code: bool = False
     color_hex: Optional[str] = None  # e.g. "003366" or None for default
+    highlight_color: Optional[str] = None  # e.g. "YELLOW", "CYAN", etc.
+    confidence: Optional[float] = None  # OCR confidence score (0.0 to 1.0)
     bbox: Optional[Tuple[float, float, float, float]] = None  # [x0, y0, x1, y1]
 
 
@@ -39,14 +41,18 @@ class ParagraphModel:
 
     def add_run(self, text: str, font_size_pt: float = 10.5, is_bold: bool = False,
                 is_italic: bool = False, is_code: bool = False,
-                color_hex: Optional[str] = None) -> RunModel:
+                color_hex: Optional[str] = None,
+                highlight_color: Optional[str] = None,
+                confidence: Optional[float] = None) -> RunModel:
         run = RunModel(
             text=text,
             font_size_pt=font_size_pt,
             is_bold=is_bold,
             is_italic=is_italic,
             is_code=is_code,
-            color_hex=color_hex
+            color_hex=color_hex,
+            highlight_color=highlight_color,
+            confidence=confidence
         )
         self.runs.append(run)
         return run
@@ -64,6 +70,8 @@ class TableCellModel:
     is_header: bool = False
     bg_color_hex: Optional[str] = None  # e.g. "EAEAEA"
     alignment: str = "LEFT"  # "LEFT", "RIGHT", "CENTER"
+    confidence: Optional[float] = None
+    highlight_color: Optional[str] = None
 
 
 @dataclass

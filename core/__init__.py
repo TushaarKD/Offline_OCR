@@ -7,6 +7,13 @@ from .ocr_engine import run_single_pass_ocr, cluster_items_into_lines, clean_tex
 from .layout_engine import analyze_page_layout, recursive_xy_cut, sample_text_color_from_crop, sample_cell_background_color
 from .table_engine import extract_table_model
 from .docx_compiler import compile_document
+from .qa_auditor import (
+    validate_and_heal_table,
+    audit_document,
+    audit_accounting_table,
+    apply_low_confidence_highlighting,
+    generate_qa_summary_markdown
+)
 from .preprocessor import (
     preprocess_document_image,
     auto_deskew_image,

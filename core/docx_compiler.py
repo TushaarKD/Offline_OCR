@@ -86,6 +86,15 @@ def _compile_run(paragraph, run_model: RunModel):
         except Exception:
             pass
 
+    if run_model.highlight_color:
+        try:
+            from docx.enum.text import WD_COLOR_INDEX
+            color_index = getattr(WD_COLOR_INDEX, run_model.highlight_color.upper(), None)
+            if color_index:
+                run.font.highlight_color = color_index
+        except Exception:
+            pass
+
 
 def _compile_paragraph(doc: Document, p_model: ParagraphModel):
     """Compile ParagraphModel to a native Word paragraph with typography spacing."""
@@ -134,6 +143,9 @@ def _compile_paragraph(doc: Document, p_model: ParagraphModel):
 
 def _compile_table(doc: Document, t_model: TableModel, page_content_width: float = 7.0):
     """Compile TableModel to a native Word table with proportional columns, cell shading, padding and alignment."""
+    from core.qa_auditor import validate_and_heal_table
+    t_model, _ = validate_and_heal_table(t_model, page_content_width=page_content_width)
+
     if not t_model.rows:
         return
 
@@ -224,6 +236,14 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
                 run.font.size = Pt(9.5)
                 if cell_data.is_header:
                     run.bold = True
+                if cell_data.highlight_color:
+                    try:
+                        from docx.enum.text import WD_COLOR_INDEX
+                        color_index = getattr(WD_COLOR_INDEX, cell_data.highlight_color.upper(), None)
+                        if color_index:
+                            run.font.highlight_color = color_index
+                    except Exception:
+                        pass
 
             # Background shading
             if cell_data.bg_color_hex:

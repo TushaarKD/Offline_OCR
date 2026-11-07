@@ -202,6 +202,8 @@ def process_scanned_page_to_model(
             line_x0 = min(i['x0'] for i in l)
             line_x1 = max(i['x1'] for i in l)
             line_h = max(i['height'] for i in l)
+            line_scores = [i['score'] for i in l if 'score' in i and i['score'] is not None]
+            line_score = float(np.mean(line_scores)) if line_scores else 1.0
 
             # Sample ink stroke color from pixels under bounding box
             cy0, cy1 = max(0, int(line_y0)), min(h, int(line_y1))
@@ -218,7 +220,8 @@ def process_scanned_page_to_model(
                 'y1': line_y1,
                 'height': line_h,
                 'content': line_str,
-                'color_hex': line_color
+                'color_hex': line_color,
+                'score': line_score
             })
 
     # Calculate median line height of normal body lines on the page
@@ -237,20 +240,23 @@ def process_scanned_page_to_model(
     curr_para_lines: List[str] = []
     curr_para_colors: List[Optional[str]] = []
     curr_para_heights: List[float] = []
+    curr_para_scores: List[float] = []
     prev_y1 = None
     prev_text = ""
 
     def flush_paragraph():
-        nonlocal curr_para_lines, curr_para_colors, curr_para_heights
+        nonlocal curr_para_lines, curr_para_colors, curr_para_heights, curr_para_scores
         if not curr_para_lines:
             return
         full_text = ' '.join(curr_para_lines).strip()
         para_colors = list(curr_para_colors)
         para_heights = list(curr_para_heights)
+        para_scores = list(curr_para_scores)
 
         curr_para_lines = []
         curr_para_colors = []
         curr_para_heights = []
+        curr_para_scores = []
 
         if not full_text:
             return
@@ -259,6 +265,7 @@ def process_scanned_page_to_model(
         max_h = max(para_heights) if para_heights else median_h
         raw_pt = (max_h / float(dpi)) * 72.0 * 0.95
         color = next((c for c in para_colors if c), None)
+        avg_score = float(np.mean(para_scores)) if para_scores else 1.0
 
         # Typography Point Scaling & Hierarchy
         is_chapter = bool(re.search(r'^(?:CHAPTER\s*-\s*\d+|PART\s*-\s*[IVXLCDM\d]+)', cleaned_text, re.IGNORECASE))
@@ -270,24 +277,24 @@ def process_scanned_page_to_model(
         if is_chapter or is_major_title:
             p = page_model.add_paragraph(style="Heading 1")
             pt_size = round(max(16.0, min(22.0, raw_pt)), 1)
-            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color, confidence=avg_score)
         elif is_section_head:
             p = page_model.add_paragraph(style="Heading 2")
             pt_size = round(max(13.0, min(15.5, raw_pt)), 1)
-            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color, confidence=avg_score)
         elif is_question:
             p = page_model.add_paragraph(style="Heading 3")
-            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True, color_hex=color)
+            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True, color_hex=color, confidence=avg_score)
         elif cleaned_text.strip() == "Answer" or cleaned_text.startswith("Answer\n"):
             p = page_model.add_paragraph(style="Normal")
-            p.add_run("Answer", font_size_pt=11.0, is_bold=True, color_hex=color)
+            p.add_run("Answer", font_size_pt=11.0, is_bold=True, color_hex=color, confidence=avg_score)
             rem = cleaned_text[len("Answer"):].strip()
             if rem:
                 p2 = page_model.add_paragraph(style="Normal")
-                p2.add_run(rem, font_size_pt=10.5, color_hex=color)
+                p2.add_run(rem, font_size_pt=10.5, color_hex=color, confidence=avg_score)
         elif is_bullet:
             p = page_model.add_paragraph(style="List Bullet")
-            p.add_run(cleaned_text, font_size_pt=10.5, color_hex=color)
+            p.add_run(cleaned_text, font_size_pt=10.5, color_hex=color, confidence=avg_score)
         else:
             p = page_model.add_paragraph(style="Normal")
             # If fine print / footer / header
@@ -295,7 +302,7 @@ def process_scanned_page_to_model(
                 pt_size = round(max(8.5, min(9.5, raw_pt)), 1)
             else:
                 pt_size = 10.5
-            p.add_run(cleaned_text, font_size_pt=pt_size, color_hex=color)
+            p.add_run(cleaned_text, font_size_pt=pt_size, color_hex=color, confidence=avg_score)
 
     for el in all_elements:
         if el['type'] == 'table':
@@ -313,6 +320,7 @@ def process_scanned_page_to_model(
             y0, y1 = el['y0'], el['y1']
             col = el.get('color_hex')
             h_line = el.get('height', median_h)
+            sc = el.get('score', 1.0)
 
             is_header = (y0 < h * 0.08) or (bool(re.search(r'^(?:ACI\b|CHAPTER|PART\s*-|AS\s*\d+:)', raw_text)) and y0 < h * 0.15)
             is_footer = (y1 > h * 0.91) or bool(re.search(r'Page \d+\.\d+|BY.*AGARWAL', raw_text))
@@ -326,6 +334,7 @@ def process_scanned_page_to_model(
             curr_para_lines.append(raw_text)
             curr_para_colors.append(col)
             curr_para_heights.append(h_line)
+            curr_para_scores.append(sc)
             prev_y1 = y1
             prev_text = raw_text.strip()
 
@@ -369,7 +378,9 @@ def convert_document(
     deskew: bool = True,
     remove_shadows: bool = True,
     suppress_watermarks: bool = False,
-    fix_orientation: bool = True
+    fix_orientation: bool = True,
+    highlight_low_confidence: bool = False,
+    qa_audit: bool = False
 ) -> Tuple[str, Optional[str]]:
     """
     Unified conversion entrypoint:
@@ -470,6 +481,16 @@ def convert_document(
             if p in page_results:
                 doc_model.pages.append(page_results[p])
 
+    # Self-Healing QA Audit & Verification Loop
+    from core.qa_auditor import audit_document, apply_low_confidence_highlighting, generate_qa_summary_markdown
+    if highlight_low_confidence:
+        highlighted = apply_low_confidence_highlighting(doc_model, threshold=0.60)
+        print(f"Highlighted {highlighted} low-confidence (<60%) text runs in soft yellow.")
+
+    qa_report = audit_document(doc_model, low_conf_threshold=0.60, page_content_width=content_width)
+    if qa_audit:
+        print("\n" + generate_qa_summary_markdown(qa_report))
+
     # Direct compile to Word DOCX
     print("\nSynthesizing native flow Microsoft Word (.docx)...")
     compile_document(doc_model, output_docx)
@@ -520,6 +541,10 @@ def main():
     parser.add_argument("--suppress-watermarks", action="store_true", help="Enable faint watermark suppression")
     parser.add_argument("--no-orientation", action="store_true", help="Disable 360-degree orientation detection")
 
+    # Quality Assurance flags
+    parser.add_argument("--highlight-low-confidence", action="store_true", help="Highlight low-confidence (<60%) text runs in soft yellow")
+    parser.add_argument("--qa-audit", action="store_true", help="Print detailed quality assurance & self-healing audit report")
+
     args = parser.parse_args()
 
     convert_document(
@@ -533,7 +558,9 @@ def main():
         deskew=not args.no_deskew,
         remove_shadows=not args.no_shadow_removal,
         suppress_watermarks=args.suppress_watermarks,
-        fix_orientation=not args.no_orientation
+        fix_orientation=not args.no_orientation,
+        highlight_low_confidence=args.highlight_low_confidence,
+        qa_audit=args.qa_audit
     )
 
 
