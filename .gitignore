@@ -24,6 +24,7 @@ docx/
 *.docx
 
 # Temporary files
+scratch/
 *.tmp
 .DS_Store
 Thumbs.db

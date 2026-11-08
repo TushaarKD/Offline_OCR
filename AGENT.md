@@ -42,3 +42,8 @@ Whenever new issues, bugs, logs, or visual discrepancies are identified, the age
    - Each phase must conclude with an automated unit/regression or visual verification test before declaring completion.
 6. **Living Source of Truth**:
    - The active plan remains the single source of truth across conversation turns to ensure zero context loss and zero drifting.
+
+---
+
+## 📌 PENDING / PARKED PLANS
+- **Plan 04 (`plans/04_DOCUMENT_GENERALIZATION_AND_INTEGRITY_PLAN.md`)**: Parked for future implementation (covers generalized header/footer masking, morphological table line snapping, list outdent segmentation, and compound word fusion healing).
