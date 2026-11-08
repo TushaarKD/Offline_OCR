@@ -177,6 +177,69 @@ def parse_html_table_to_model(
     return t_model
 
 
+def split_cross_column_tokens(items: List[Dict[str, Any]], dividers: List[int]) -> List[Dict[str, Any]]:
+    """
+    Splits OCR tokens that erroneously cross vertical column divider rulings or gutters.
+    In T-accounts and multi-column ledgers, text detectors (e.g. DBNet) frequently group
+    the right-aligned amount of one column and the left-aligned account title of the
+    adjacent column into a single bounding box (e.g. '1,00,0 oo|By Cash Purchases' or
+    '1,40,000By Trade payables').
+    """
+    if not dividers or not items:
+        return items
+
+    split_pattern = re.compile(
+        r'^([₹\(\s]*[\d,\.\s]+(?:oo|o)?\)?)\s*(?:\||\s*)\s*([A-Za-z].*)$'
+    )
+
+    new_items: List[Dict[str, Any]] = []
+    for it in items:
+        split_done = False
+        for div_x in sorted(dividers):
+            # Check if token horizontally straddles this column divider
+            if it['x0'] < div_x - 10 and it['x1'] > div_x + 10:
+                left_txt, right_txt = None, None
+
+                # 1. Pipe separator check (OCR detected ruling line as pipe)
+                if '|' in it['text']:
+                    parts = it['text'].split('|', 1)
+                    p0, p1 = parts[0].strip(), parts[1].strip()
+                    if p0 and p1:
+                        left_txt, right_txt = p0, p1
+
+                # 2. Amount followed by text check
+                if not left_txt:
+                    m = split_pattern.match(it['text'])
+                    if m:
+                        left_txt = m.group(1).strip()
+                        right_txt = m.group(2).strip()
+
+                if left_txt and right_txt:
+                    new_items.append({
+                        'x0': it['x0'], 'x1': div_x - 2,
+                        'y0': it['y0'], 'y1': it['y1'],
+                        'cx': (it['x0'] + div_x) / 2.0,
+                        'cy': it['cy'],
+                        'h': it['h'],
+                        'text': left_txt
+                    })
+                    new_items.append({
+                        'x0': div_x + 2, 'x1': it['x1'],
+                        'y0': it['y0'], 'y1': it['y1'],
+                        'cx': (div_x + it['x1']) / 2.0,
+                        'cy': it['cy'],
+                        'h': it['h'],
+                        'text': right_txt
+                    })
+                    split_done = True
+                    break
+
+        if not split_done:
+            new_items.append(it)
+
+    return new_items
+
+
 def extract_geometric_table(crop_img: Optional[np.ndarray],
                             table_ocr_boxes: List[Any],
                             table_ocr_texts: List[str],
@@ -274,6 +337,11 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
 
     num_cols = len(col_intervals)
 
+    # 1.5. Split cross-column tokens spanning vertical dividers
+    if num_cols > 1:
+        dividers = [c_end for (c_start, c_end) in col_intervals[:-1]]
+        items = split_cross_column_tokens(items, dividers)
+
     # 2. Cluster tokens into horizontal rows
     items.sort(key=lambda it: it['y0'])
     rows: List[List[Dict[str, Any]]] = []
@@ -356,6 +424,15 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
 
     if not grid:
         return None
+
+    # T-account header healing: if 4 columns with Particulars/Inflows and ₹ in col 3, ensure col 1 has ₹
+    if len(grid) > 0 and num_cols == 4:
+        col0_t = grid[0][0].text.lower()
+        col2_t = grid[0][2].text.lower()
+        if ('particular' in col0_t or 'inflow' in col0_t) and ('particular' in col2_t or 'outflow' in col2_t):
+            if '₹' in grid[0][3].text and not grid[0][1].text:
+                grid[0][1].text = '₹'
+                grid[0][1].alignment = 'CENTER'
 
     # 4. Proportional widths
     col_lens = [3.0] * num_cols

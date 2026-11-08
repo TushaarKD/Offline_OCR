@@ -44,17 +44,17 @@ Achieve **100% table accuracy and fidelity** across all scanned accounting and f
 ---
 
 ### Phase 2: T-Account Cross-Column Token Splitting & Row Alignment
-- [ ] Implement `split_cross_column_tokens(...)` in `core/table_engine.py`:
+- [x] Implement `split_cross_column_tokens(...)` in `core/table_engine.py`:
   - Identify tokens containing column dividers:
     - Tokens containing pipe characters: `[Amount] | By [Text]` or `[Amount] | [Text]`.
     - Tokens containing numbers followed immediately by `By ` or `To `: `1,40,000By Trade payables`, `50,00 oBy Income Tax`.
   - Split text and bounding boxes horizontally at the column boundary into two distinct tokens:
     - Left token assigned to Debit Amount (Column 1).
     - Right token assigned to Credit Particulars (Column 2).
-- [ ] Implement independent debit/credit row alignment:
+- [x] Implement independent debit/credit row alignment:
   - If Debit has 7 items and Credit has 8 items, align Debit items to rows 1..7 and leave rows 8..9 empty on the Debit side.
   - Fix "To Interest & Dividend" so it occupies exactly its one row without being pushed or repeated.
-- [ ] **Verification Quality Gate**: Automated test on Page 1 Table 0 verifying all 4 columns: Debit Particulars, Debit Amount, Credit Particulars, and Credit Amount populated with exact numbers.
+- [x] **Verification Quality Gate**: Automated test on Page 1 Table 0 and Page 3 Table 0 verifying all 4 columns: Debit Particulars, Debit Amount, Credit Particulars, and Credit Amount populated with exact numbers (`tests/test_plan03_phase2_t_account.py` passed 100%).
 
 ---
 
