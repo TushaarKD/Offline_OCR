@@ -92,8 +92,53 @@ def clean_text_spacing(text: str) -> str:
     for key, val in url_map.items():
         text = text.replace(key, val)
 
+    text = heal_financial_text(text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     return text.strip()
+
+
+def heal_financial_text(text: str) -> str:
+    """
+    Industry-standard financial number and typography healing.
+    Heals OCR CTC confusions on zeros ('oo' -> '00', 'o' -> '0' in amounts),
+    corrects units header typos (e.g. '(3'000)' -> "('000)"), and restores compound word spacing.
+    """
+    if not text:
+        return text
+
+    # 1. Header typo: (3'000) -> ('000)
+    text = re.sub(r"\(\s*3\s*['’]\s*000\s*\)", "('000)", text)
+    text = re.sub(r"\(\s*₹\s+in\s+3\s*['’]\s*000\s*\)", "(₹ in '000)", text)
+
+    # 2. Heal Indian format thousands: e.g. '1,00,0 oo' -> '1,00,000', '70,0 oo' -> '70,000'
+    text = re.sub(r'(\d+,\d+),\s*0\s*oo\b', r'\1,000', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+),\s*0\s*oo\b', r'\1,000', text, flags=re.IGNORECASE)
+
+    # 3. Heal trailing o/oo after comma: e.g. '30,00o' -> '30,000', '50,00 o' -> '50,000', '1,00o' -> '1,000'
+    text = re.sub(r'(\d+,\d+)0\s*o\b', r'\g<1>00', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+,\d+)\s*oo\b', r'\g<1>00', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+,\d+)\s*o\b', r'\g<1>0', text, flags=re.IGNORECASE)
+
+    # 4. Standalone trailing 'o' after 2 zeros: e.g. '1,00o' -> '1,000'
+    text = re.sub(r'(\d+,00)\s*o\b', r'\g<1>0', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+,0)\s*oo\b', r'\g<1>00', text, flags=re.IGNORECASE)
+
+    # 5. Compound accounting words
+    compounds = {
+        r'\bTradereceivables\b': 'Trade receivables',
+        r'\bTradeReceivables\b': 'Trade Receivables',
+        r'\btradereceivables\b': 'trade receivables',
+        r'\bPayment forAccountPayables\b': 'Payment for Account Payables',
+        r'\baccountoftradepayables\b': 'account of trade payables',
+        r'\baccountofTradeReceivables\b': 'account of Trade Receivables',
+        r'\bNetCashFlowusedinOperatingActivities\b': 'Net Cash Flow used in Operating Activities',
+        r'\bPayment ofoverheads\b': 'Payment of overheads',
+        r'\bDebenturesredeemed\b': 'Debentures redeemed'
+    }
+    for pat, rep in compounds.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    return text
 
 
 def restore_currency_symbols(text: str) -> str:

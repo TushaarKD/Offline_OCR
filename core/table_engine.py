@@ -45,6 +45,26 @@ def detect_table_borders(crop_img: np.ndarray) -> bool:
     return total_line_pixels > 150
 
 
+def detect_interior_horizontal_lines(crop_img: Optional[np.ndarray], num_rows: int) -> bool:
+    """
+    Detect whether a table crop has physical horizontal ruling lines across every data row.
+    Authentic accounting tables (ledgers, cash flows) have no interior row lines.
+    """
+    if crop_img is None or crop_img.size == 0 or num_rows <= 2:
+        return False
+    gray = cv2.cvtColor(crop_img, cv2.COLOR_RGB2GRAY) if len(crop_img.shape) == 3 else crop_img
+    bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, -2)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, int(crop_img.shape[1] * 0.20)), 1))
+    h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
+    h_proj = np.sum(h_lines, axis=1)
+    h_peaks = np.where(h_proj > max(30 * 255, 0.20 * crop_img.shape[1] * 255))[0]
+    if len(h_peaks) == 0:
+        return False
+    clusters = np.split(h_peaks, np.where(np.diff(h_peaks) > 5)[0] + 1)
+    line_y = [int(np.mean(c)) for c in clusters if len(c) > 0]
+    return len(line_y) >= max(5, int(num_rows * 0.7))
+
+
 def _detect_cell_alignment(text: str, is_header: bool) -> str:
     """Detect whether cell content should be LEFT, RIGHT, or CENTER aligned."""
     s = text.strip()
@@ -164,14 +184,16 @@ def parse_html_table_to_model(
     widths = [w * scale for w in raw_w]
 
     has_borders = detect_table_borders(crop_img) if crop_img is not None else True
+    has_interior_h = detect_interior_horizontal_lines(crop_img, max_r) if crop_img is not None else False
 
     t_model = TableModel(
         rows=grid,
         num_rows=max_r,
         num_cols=max_c,
         col_widths_inches=widths,
-        style="Table Grid" if has_borders else "Light Shading",
+        style="Normal Table",
         has_borders=has_borders,
+        has_interior_h_lines=has_interior_h,
         alignment="CENTER"
     )
     return t_model
@@ -215,13 +237,15 @@ def split_cross_column_tokens(items: List[Dict[str, Any]], dividers: List[int]) 
                         right_txt = m.group(2).strip()
 
                 if left_txt and right_txt:
+                    left_clean = clean_text_spacing(restore_currency_symbols(left_txt))
+                    right_clean = clean_text_spacing(restore_currency_symbols(right_txt))
                     new_items.append({
                         'x0': it['x0'], 'x1': div_x - 2,
                         'y0': it['y0'], 'y1': it['y1'],
                         'cx': (it['x0'] + div_x) / 2.0,
                         'cy': it['cy'],
                         'h': it['h'],
-                        'text': left_txt
+                        'text': left_clean
                     })
                     new_items.append({
                         'x0': div_x + 2, 'x1': it['x1'],
@@ -229,7 +253,7 @@ def split_cross_column_tokens(items: List[Dict[str, Any]], dividers: List[int]) 
                         'cx': (div_x + it['x1']) / 2.0,
                         'cy': it['cy'],
                         'h': it['h'],
-                        'text': right_txt
+                        'text': right_clean
                     })
                     split_done = True
                     break
@@ -255,6 +279,10 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
 
     items = []
     for box, text in zip(table_ocr_boxes, table_ocr_texts):
+        # Exclude watermark / author banner text accidentally caught in table crops
+        up = text.upper()
+        if 'AJAY AGARWAL' in up or 'AIR 1 CA' in up or 'CAREER INSTITUTE' in up:
+            continue
         cleaned_t = clean_text_spacing(restore_currency_symbols(text.strip()))
         if not cleaned_t:
             continue
@@ -310,8 +338,8 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
             x1 = max(0, min(crop_w, int(it['x1'])))
             occ[x0:x1] += 1
 
-        min_x = int(min(it['x0'] for it in items))
-        max_x = int(max(it['x1'] for it in items))
+        min_x = max(0, min(crop_w - 1, int(min(it['x0'] for it in items))))
+        max_x = max(0, min(crop_w, int(max(it['x1'] for it in items))))
 
         gutters = []
         in_gutter = False
@@ -418,6 +446,7 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
                 row_cells[best_c].text = it['text']
 
         for c_cell in row_cells:
+            c_cell.text = clean_text_spacing(c_cell.text)
             c_cell.alignment = _detect_cell_alignment(c_cell.text, is_hdr)
 
         grid.append(row_cells)
@@ -446,14 +475,16 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
     widths = [w * scale for w in raw_w]
 
     has_borders = detect_table_borders(crop_img) if crop_img is not None else True
+    has_interior_h = detect_interior_horizontal_lines(crop_img, len(grid)) if crop_img is not None else False
 
     return TableModel(
         rows=grid,
         num_rows=len(grid),
         num_cols=num_cols,
         col_widths_inches=widths,
-        style="Table Grid" if has_borders else "Light Shading",
+        style="Normal Table",
         has_borders=has_borders,
+        has_interior_h_lines=has_interior_h,
         alignment="CENTER"
     )
 
@@ -525,6 +556,10 @@ def build_fallback_table_model(table_ocr_boxes: List[Any],
 
     items = []
     for box, text in zip(table_ocr_boxes, table_ocr_texts):
+        # Exclude watermark / author banner text accidentally caught in table crops
+        up = text.upper()
+        if 'AJAY AGARWAL' in up or 'AIR 1 CA' in up or 'CAREER INSTITUTE' in up:
+            continue
         cleaned_t = clean_text_spacing(restore_currency_symbols(text.strip()))
         if not cleaned_t:
             continue
@@ -616,6 +651,7 @@ def build_fallback_table_model(table_ocr_boxes: List[Any],
                 row_cells[best_c].text = it['text']
 
         for c_cell in row_cells:
+            c_cell.text = clean_text_spacing(c_cell.text)
             c_cell.alignment = _detect_cell_alignment(c_cell.text, is_hdr)
         grid.append(row_cells)
 

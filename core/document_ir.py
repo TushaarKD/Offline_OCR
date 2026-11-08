@@ -86,6 +86,7 @@ class TableModel:
     style: str = "Table Grid"
     alignment: str = "CENTER"
     has_borders: bool = True
+    has_interior_h_lines: bool = False
     bbox: Optional[Tuple[float, float, float, float]] = None
 
     def get_cell(self, r: int, c: int) -> Optional[TableCellModel]:

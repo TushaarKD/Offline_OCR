@@ -161,28 +161,107 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
         return
 
     table = doc.add_table(rows=num_rows, cols=num_cols)
-    table.style = t_model.style or "Table Grid"
+    table.style = t_model.style or "Normal Table"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Accounting border styling for borderless / light tables
-    if not t_model.has_borders:
-        tblPr = table._tbl.tblPr
-        tblBorders = OxmlElement('w:tblBorders')
-        for side, val, sz, col in [
-            ('w:top', 'single', '6', 'B0B0B0'),
-            ('w:bottom', 'single', '6', 'B0B0B0'),
-            ('w:insideH', 'single', '4', 'E0E0E0'),
-            ('w:left', 'none', '0', 'auto'),
-            ('w:right', 'none', '0', 'auto'),
-            ('w:insideV', 'none', '0', 'auto')
-        ]:
-            b = OxmlElement(side)
-            b.set(qn('w:val'), val)
-            b.set(qn('w:sz'), sz)
+    # Accounting border styling: authentic clean styling without ugly row-by-row grid boxes
+    tblPr = table._tbl.tblPr
+    existing_borders = tblPr.find(qn('w:tblBorders'))
+    if existing_borders is not None:
+        tblPr.remove(existing_borders)
+
+    tblBorders = OxmlElement('w:tblBorders')
+    has_borders = getattr(t_model, 'has_borders', True)
+    has_interior_h = getattr(t_model, 'has_interior_h_lines', False)
+
+    # Top & Bottom borders
+    for side in ('w:top', 'w:bottom'):
+        b = OxmlElement(side)
+        b.set(qn('w:val'), 'single')
+        b.set(qn('w:sz'), '6')
+        b.set(qn('w:space'), '0')
+        b.set(qn('w:color'), '333333' if has_borders else 'B0B0B0')
+        tblBorders.append(b)
+
+    # Inside horizontal lines (strictly NONE for authentic accounting tables without printed row lines)
+    in_h = OxmlElement('w:insideH')
+    if has_interior_h:
+        in_h.set(qn('w:val'), 'single')
+        in_h.set(qn('w:sz'), '4')
+        in_h.set(qn('w:space'), '0')
+        in_h.set(qn('w:color'), 'D0D0D0')
+    else:
+        in_h.set(qn('w:val'), 'none')
+        in_h.set(qn('w:sz'), '0')
+        in_h.set(qn('w:space'), '0')
+        in_h.set(qn('w:color'), 'auto')
+    tblBorders.append(in_h)
+
+    # Outer left/right borders
+    for side in ('w:left', 'w:right'):
+        b = OxmlElement(side)
+        if has_borders:
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), '6')
             b.set(qn('w:space'), '0')
-            b.set(qn('w:color'), col)
-            tblBorders.append(b)
-        tblPr.append(tblBorders)
+            b.set(qn('w:color'), '333333')
+        else:
+            b.set(qn('w:val'), 'none')
+            b.set(qn('w:sz'), '0')
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), 'auto')
+        tblBorders.append(b)
+
+    # Inside vertical dividers
+    in_v = OxmlElement('w:insideV')
+    if has_borders:
+        in_v.set(qn('w:val'), 'single')
+        in_v.set(qn('w:sz'), '4')
+        in_v.set(qn('w:space'), '0')
+        in_v.set(qn('w:color'), '333333')
+    else:
+        in_v.set(qn('w:val'), 'none')
+        in_v.set(qn('w:sz'), '0')
+        in_v.set(qn('w:space'), '0')
+        in_v.set(qn('w:color'), 'auto')
+    tblBorders.append(in_v)
+
+    tblPr.append(tblBorders)
+
+    # Header row underline (separates header labels from data records)
+    if num_rows > 1:
+        for cell in table.rows[0].cells:
+            tcPr = cell._tc.get_or_add_tcPr()
+            tcBorders = tcPr.find(qn('w:tcBorders'))
+            if tcBorders is None:
+                tcBorders = OxmlElement('w:tcBorders')
+                tcPr.append(tcBorders)
+            b = OxmlElement('w:bottom')
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), '6')
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), '333333')
+            tcBorders.append(b)
+
+    # If the last row contains totals, add a clean top border line above it
+    if num_rows > 2:
+        last_row_data = t_model.rows[-1]
+        is_total_row = any('total' in c.text.lower() or 'net' in c.text.lower() for c in last_row_data)
+        if not is_total_row and last_row_data[0].text.strip() == "" and any(c.text.strip() for c in last_row_data[1:]):
+            is_total_row = True
+        if is_total_row:
+            for cell in table.rows[-1].cells:
+                tcPr = cell._tc.get_or_add_tcPr()
+                tcBorders = tcPr.find(qn('w:tcBorders'))
+                if tcBorders is None:
+                    tcBorders = OxmlElement('w:tcBorders')
+                    tcPr.append(tcBorders)
+                b = OxmlElement('w:top')
+                b.set(qn('w:val'), 'single')
+                b.set(qn('w:sz'), '6')
+                b.set(qn('w:space'), '0')
+                b.set(qn('w:color'), '333333')
+                tcBorders.append(b)
 
     # Determine column widths
     if t_model.col_widths_inches and len(t_model.col_widths_inches) == num_cols:
