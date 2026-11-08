@@ -42,21 +42,21 @@ Resolve the severe table extraction regression observed in `samples/CA Inter Adv
 ---
 
 ### Phase 2: Fail-Safe Token Preservation & Fallback Mechanism (Zero Data Loss)
-- [ ] Refactor `convert.py` table token assignment:
+- [x] Refactor `convert.py` table token assignment:
   - Do NOT commit tokens to `table_assigned_indices` until `t_model` is verified non-null and successfully created.
   - If `extract_table_model` fails, release OCR tokens back into the page flow so no raw data or ledger text is lost.
-- [ ] Implement a spatial tabular fallback constructor in `core/table_engine.py`:
+- [x] Implement a spatial tabular fallback constructor in `core/table_engine.py`:
   - If neural SLANet+ fails to produce a structure but layout analysis detected a table and OCR items exist, cluster items by horizontal line and vertical columns into a native `TableModel`.
-- [ ] **Verification Quality Gate**: Unit test verifying that even if `extract_table_model` returns `None`, 100% of the OCR tokens are preserved in the document output.
+- [x] **Verification Quality Gate**: Unit test verifying that even if `extract_table_model` returns `None`, 100% of the OCR tokens are preserved in the document output (`tests/test_plan02_phase2_fallback.py` passed).
 
 ---
 
 ### Phase 3: Currency Symbol Restoration (`₹` vs `天` / `?`) in Tabular Context
-- [ ] Enhance `restore_currency_symbols()` in `core/ocr_engine.py`:
+- [x] Enhance `restore_currency_symbols()` in `core/ocr_engine.py`:
   - Replace `天` (`\u5929`) and `?` / `？` with `₹` when preceding numeric amounts (e.g. `天 1,20,000` -> `₹ 1,20,000`).
   - Recognize standalone column headers where the cell text is simply `天` or `?` and convert them to `₹`.
-- [ ] Apply `restore_currency_symbols()` systematically during cell text extraction in `core/table_engine.py`.
-- [ ] **Verification Quality Gate**: Test on accounting ledger headers ensuring `Particulars | 天 | Particulars | 天` becomes `Particulars | ₹ | Particulars | ₹`.
+- [x] Apply `restore_currency_symbols()` systematically during cell text extraction in `core/table_engine.py`.
+- [x] **Verification Quality Gate**: Test on accounting ledger headers ensuring `Particulars | 天 | Particulars | 天` becomes `Particulars | ₹ | Particulars | ₹` (`tests/test_plan02_phase3_currency.py` passed).
 
 ---
 

@@ -187,7 +187,7 @@ def extract_table_model(crop_img: np.ndarray,
     try:
         if table_ocr_boxes and len(table_ocr_boxes) > 0:
             boxes = table_ocr_boxes
-            texts = table_ocr_texts
+            texts = [restore_currency_symbols(t) for t in table_ocr_texts]
             scores = table_ocr_scores
         else:
             # Provide dummy single box with empty text so format_ocr_results has valid 2D array
@@ -211,3 +211,134 @@ def extract_table_model(crop_img: np.ndarray,
     except Exception as exc:
         logger.warning(f"Table extraction failed: {exc}", exc_info=True)
     return None
+
+
+def build_fallback_table_model(table_ocr_boxes: List[Any],
+                               table_ocr_texts: List[str],
+                               crop_img: Optional[np.ndarray] = None,
+                               page_content_width: float = 7.0) -> Optional[TableModel]:
+    """
+    Synthesizes a TableModel directly from spatial clustering of OCR tokens
+    when neural SLANet+ cannot produce a structure, ensuring zero data loss.
+    """
+    if not table_ocr_boxes or not table_ocr_texts:
+        return None
+
+    items = []
+    for box, text in zip(table_ocr_boxes, table_ocr_texts):
+        cleaned_t = clean_text_spacing(restore_currency_symbols(text.strip()))
+        if not cleaned_t:
+            continue
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+        items.append({
+            'x0': x0, 'x1': x1,
+            'y0': y0, 'y1': y1,
+            'cx': (x0 + x1) / 2.0,
+            'cy': (y0 + y1) / 2.0,
+            'h': max(1.0, y1 - y0),
+            'text': cleaned_t
+        })
+
+    if not items:
+        return None
+
+    # 1. Cluster tokens vertically into rows
+    sorted_items = sorted(items, key=lambda it: (it['y0'], it['x0']))
+    rows: List[List[Dict[str, Any]]] = []
+    for it in sorted_items:
+        placed = False
+        for r in rows:
+            r_y0 = min(x['y0'] for x in r)
+            r_y1 = max(x['y1'] for x in r)
+            r_h = max(1.0, r_y1 - r_y0)
+            overlap = min(it['y1'], r_y1) - max(it['y0'], r_y0)
+            if overlap > 0.4 * min(it['h'], r_h):
+                r.append(it)
+                placed = True
+                break
+        if not placed:
+            rows.append([it])
+
+    rows.sort(key=lambda r: min(x['y0'] for x in r))
+    for r in rows:
+        r.sort(key=lambda x: x['x0'])
+
+    max_cols = max(len(r) for r in rows)
+    if max_cols <= 0:
+        return None
+
+    # 2. Determine column anchors
+    if max_cols == 1:
+        col_centers = [sum(it['cx'] for r in rows for it in r) / len(items)]
+    else:
+        full_rows = [r for r in rows if len(r) == max_cols]
+        if not full_rows:
+            full_rows = rows
+        col_centers = []
+        for c in range(max_cols):
+            c_vals = [r[c]['cx'] for r in full_rows if len(r) > c]
+            col_centers.append(sum(c_vals) / len(c_vals) if c_vals else 0.0)
+
+    # 3. Build TableCellModel grid
+    grid: List[List[TableCellModel]] = []
+    for r_idx, r in enumerate(rows):
+        is_hdr = (r_idx == 0)
+        if len(r) == 1 and max_cols > 1:
+            # Single spanning cell across all columns
+            cell = TableCellModel(
+                row_idx=r_idx,
+                col_idx=0,
+                rowspan=1,
+                colspan=max_cols,
+                text=r[0]['text'],
+                is_header=is_hdr,
+                alignment=_detect_cell_alignment(r[0]['text'], is_hdr),
+                bg_color_hex="F2F4F7" if is_hdr else None
+            )
+            row_cells = [cell]
+            for c_idx in range(1, max_cols):
+                row_cells.append(TableCellModel(row_idx=r_idx, col_idx=c_idx, text="", is_header=is_hdr))
+            grid.append(row_cells)
+            continue
+
+        row_cells = [
+            TableCellModel(row_idx=r_idx, col_idx=c, text="", is_header=is_hdr,
+                           bg_color_hex="F2F4F7" if is_hdr else None)
+            for c in range(max_cols)
+        ]
+        for it in r:
+            best_c = min(range(max_cols), key=lambda c: abs(it['cx'] - col_centers[c]))
+            if row_cells[best_c].text:
+                row_cells[best_c].text += " " + it['text']
+            else:
+                row_cells[best_c].text = it['text']
+
+        for c_cell in row_cells:
+            c_cell.alignment = _detect_cell_alignment(c_cell.text, is_hdr)
+        grid.append(row_cells)
+
+    # 4. Proportional widths
+    col_lens = [3.0] * max_cols
+    for row in grid:
+        for c_cell in row:
+            if c_cell.colspan == 1:
+                col_lens[c_cell.col_idx] = max(col_lens[c_cell.col_idx], float(len(c_cell.text)))
+    total_len = sum(col_lens)
+    raw_w = [max(0.5, (l / total_len) * page_content_width) for l in col_lens]
+    scale = page_content_width / sum(raw_w)
+    widths = [w * scale for w in raw_w]
+
+    has_borders = detect_table_borders(crop_img) if crop_img is not None else True
+
+    return TableModel(
+        rows=grid,
+        num_rows=len(grid),
+        num_cols=max_cols,
+        col_widths_inches=widths,
+        style="Table Grid" if has_borders else "Light Shading",
+        has_borders=has_borders,
+        alignment="CENTER"
+    )

@@ -33,7 +33,7 @@ from core.layout_engine import (
     analyze_page_layout, recursive_xy_cut,
     sample_text_color_from_crop
 )
-from core.table_engine import extract_table_model
+from core.table_engine import extract_table_model, build_fallback_table_model
 from core.docx_compiler import compile_document
 from core.preprocessor import preprocess_document_image
 
@@ -98,8 +98,9 @@ def process_scanned_page_to_model(
         x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
         crop = img_np[y1:y2, x1:x2]
 
-        # Collect and shift OCR items inside table
+        # Collect candidate OCR items inside table bounding box
         t_boxes, t_texts, t_scores = [], [], []
+        candidate_indices = []
         for idx, (dt_box, text, score) in enumerate(raw_ocr):
             cx = sum(p[0] for p in dt_box) / 4.0
             cy = sum(p[1] for p in dt_box) / 4.0
@@ -108,9 +109,13 @@ def process_scanned_page_to_model(
                 t_boxes.append(shifted)
                 t_texts.append(text)
                 t_scores.append(score)
-                table_assigned_indices.add(idx)
+                candidate_indices.append(idx)
 
         t_model = extract_table_model(crop, t_boxes, t_texts, t_scores, page_content_width=content_width)
+        if t_model is None and t_boxes:
+            # Fallback to spatial token clustering table if neural SLANet+ failed
+            t_model = build_fallback_table_model(t_boxes, t_texts, crop_img=crop, page_content_width=content_width)
+
         if t_model:
             t_model.bbox = (x1, y1, x2, y2)
             tables_data.append({
@@ -119,6 +124,12 @@ def process_scanned_page_to_model(
                 'x1': x2, 'y1': y2,
                 'model': t_model
             })
+            # Commit tokens as consumed by table ONLY when table was successfully built
+            table_assigned_indices.update(candidate_indices)
+        else:
+            # If both neural SLANet+ and fallback failed, do NOT mark candidate_indices as consumed!
+            # Tokens will naturally flow into non_table_items, guaranteeing ZERO data loss.
+            print(f"  [Table Fallback Notice] BBox ({x1}, {y1}, {x2}, {y2}) released {len(candidate_indices)} tokens to text flow.")
 
     # 4b. Extract High-Res Figures & Illustrations
     figures_data: List[Dict[str, Any]] = []

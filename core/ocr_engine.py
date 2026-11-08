@@ -97,8 +97,36 @@ def clean_text_spacing(text: str) -> str:
 
 
 def restore_currency_symbols(text: str) -> str:
-    """Restore Indian Rupee symbol (₹) where OCR reads '?' preceding numeric amounts."""
-    return re.sub(r'(?:\?|？)\s*(\d+(?:,\d+)*(?:\.\d+)?)', r'₹ \1', text)
+    """
+    Restore Indian Rupee symbol (₹) where OCR reads '?' or '天' (U+5929):
+    - Standalone table cell/column headers: '天', '?', '？' -> '₹'
+    - Units in parentheses: '(天)', '(?)', '(天 in lakhs)', '(? in '000)' -> '(₹ in ...)'
+    - Standalone or delimiter-bound '天' -> '₹' (e.g. 'Particulars | 天 | Particulars')
+    - Preceding numeric amounts: '? 1,20,000', '天 50,000' -> '₹ 1,20,000'
+    - Word-Rupee boundary spacing: 'of₹ 25' -> 'of ₹ 25', '₹100' -> '₹ 100'
+    - Preserves authentic interrogative question marks ('What is AS 3?').
+    """
+    s = text.strip()
+    if s in ('天', '?', '？'):
+        return '₹'
+
+    # Currency inside parentheses e.g. (天), (?), (天 in '000), (? in Lakhs)
+    text = re.sub(r'\(\s*[?？天]\s*\)', '(₹)', text)
+    text = re.sub(r'\(\s*[?？天]\s+in\s+([^\)]+)\)', r'(₹ in \1)', text, flags=re.IGNORECASE)
+
+    # Any '天' in English documents represents ₹
+    text = re.sub(r'天', '₹', text)
+
+    # '?' preceding numeric amounts e.g. '? 1,20,000'
+    text = re.sub(r'(?:[?？])\s*(\d+(?:,\d+)*(?:\.\d+)?)', r'₹ \1', text)
+
+    # Missing space before ₹ e.g. 'outflow of₹ 25' -> 'outflow of ₹ 25'
+    text = re.sub(r'([a-zA-Z])₹', r'\1 ₹', text)
+
+    # Ensure space after ₹ before digits e.g. '₹25' -> '₹ 25'
+    text = re.sub(r'₹(\d)', r'₹ \1', text)
+
+    return text
 
 
 def cluster_items_into_lines(items: List[Dict[str, Any]], max_h_gap: float = 65.0) -> List[List[Dict[str, Any]]]:
