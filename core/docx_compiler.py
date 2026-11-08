@@ -14,7 +14,7 @@ from typing import Optional, Dict
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -204,6 +204,18 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
         for c_idx, cell in enumerate(row.cells):
             cell.width = col_widths[c_idx]
 
+    # Configure row properties: w:cantSplit on all rows, w:tblHeader on header rows
+    for r_idx, docx_row in enumerate(table.rows):
+        trPr = docx_row._tr.get_or_add_trPr()
+        trPr.append(OxmlElement('w:cantSplit'))
+        is_row_header = False
+        if r_idx == 0:
+            is_row_header = True
+        elif r_idx < len(t_model.rows):
+            is_row_header = all(c.is_header for c in t_model.rows[r_idx] if c.text.strip())
+        if is_row_header:
+            trPr.append(OxmlElement('w:tblHeader'))
+
     # Track merged regions
     merged_covered = set()
 
@@ -231,7 +243,8 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             p.paragraph_format.line_spacing = 1.05
 
             _apply_alignment(p, cell_data.alignment)
-            _set_cell_padding(target_cell, top_pt=3.0, bottom_pt=3.0, left_pt=5.0, right_pt=5.0)
+            target_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            _set_cell_padding(target_cell, top_pt=3.5, bottom_pt=3.5, left_pt=6.0, right_pt=6.0)
 
             # Add runs
             if cell_data.runs:
@@ -239,7 +252,9 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
                     _compile_run(p, r)
             else:
                 run = p.add_run(cell_data.text)
+                run.font.name = "Calibri"
                 run.font.size = Pt(9.5)
+                run.font.color.rgb = RGBColor(0, 0, 0)
                 if cell_data.is_header:
                     run.bold = True
                 if cell_data.highlight_color:

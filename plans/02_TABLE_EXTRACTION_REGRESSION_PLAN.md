@@ -61,12 +61,12 @@ Resolve the severe table extraction regression observed in `samples/CA Inter Adv
 ---
 
 ### Phase 4: Native Word Table Styling & Flow Fidelity
-- [ ] Ensure `docx_renderer.py` applies robust Word table formatting:
+- [x] Ensure `core/docx_compiler.py` applies robust Word table formatting:
   - Add `w:cantSplit` to prevent individual table rows from splitting across page breaks.
   - Add `w:tblHeader` to table header rows so headers repeat seamlessly if a ledger spans pages.
   - Align numeric cells to the right and text cells to the left.
   - Apply clean borders (`Table Grid`) and header shading (`F2F4F7`).
-- [ ] **Verification Quality Gate**: Verify generated `.docx` table XML has proper borders, header flags, and row split prevention.
+- [x] **Verification Quality Gate**: Verify generated `.docx` table XML has proper borders, header flags, and row split prevention (`tests/test_plan02_phase4_styling.py` passed).
 
 ---
 
