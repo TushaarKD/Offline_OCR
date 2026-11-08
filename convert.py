@@ -102,6 +102,9 @@ def process_scanned_page_to_model(
         t_boxes, t_texts, t_scores = [], [], []
         candidate_indices = []
         for idx, (dt_box, text, score) in enumerate(raw_ocr):
+            up_clean = re.sub(r'[^A-Z0-9]', '', text.upper())
+            if 'AGARWAL' in up_clean or 'CAREERINSTITUTE' in up_clean or 'AIR1CA' in up_clean or 'PAGE5' in up_clean:
+                continue
             cx = sum(p[0] for p in dt_box) / 4.0
             cy = sum(p[1] for p in dt_box) / 4.0
             if x1 <= cx <= x2 and y1 <= cy <= y2:
@@ -117,15 +120,19 @@ def process_scanned_page_to_model(
             t_model = build_fallback_table_model(t_boxes, t_texts, crop_img=crop, page_content_width=content_width)
 
         if t_model:
-            t_model.bbox = (x1, y1, x2, y2)
-            tables_data.append({
-                'type': 'table',
-                'x0': x1, 'y0': y1,
-                'x1': x2, 'y1': y2,
-                'model': t_model
-            })
-            # Commit tokens as consumed by table ONLY when table was successfully built
-            table_assigned_indices.update(candidate_indices)
+            # Suppress 1-column narrative boxes (e.g. Question outline boxes), release to native text flow
+            if t_model.num_cols <= 1:
+                t_model = None
+            else:
+                t_model.bbox = (x1, y1, x2, y2)
+                tables_data.append({
+                    'type': 'table',
+                    'x0': x1, 'y0': y1,
+                    'x1': x2, 'y1': y2,
+                    'model': t_model
+                })
+                # Commit tokens as consumed by table ONLY when table was successfully built
+                table_assigned_indices.update(candidate_indices)
         else:
             # If both neural SLANet+ and fallback failed, do NOT mark candidate_indices as consumed!
             # Tokens will naturally flow into non_table_items, guaranteeing ZERO data loss.
@@ -431,6 +438,15 @@ def process_scanned_page_to_model(
                 prev_y1 = y1
                 continue
 
+            # Suppress running headers & running footers (per user instruction)
+            up_clean = re.sub(r'[^A-Z0-9]', '', raw_text.upper())
+            is_banner = 'AGARWAL' in up_clean or 'CAREERINSTITUTE' in up_clean or 'AIR1CA' in up_clean or 'PAGE5' in up_clean
+            is_running_header = (y1 < h * 0.06) or (bool(re.search(r'^(?:ACI\b|CHAPTER\b|PART\s*-|AS\s*\d+:)', raw_text, re.IGNORECASE)) and y1 < h * 0.08)
+            is_running_footer = (y0 > h * 0.90) or is_banner
+            if is_running_header or is_running_footer:
+                flush_paragraph()
+                continue
+
             is_header = (y0 < h * 0.08) or (bool(re.search(r'^(?:ACI\b|CHAPTER|PART\s*-|AS\s*\d+:)', raw_text)) and y0 < h * 0.15)
             is_footer = (y1 > h * 0.91) or bool(re.search(r'Page \d+\.\d+|BY.*AGARWAL', raw_text))
             is_new_list = bool(re.search(r'^\((?:[0-9]{1,2}|[a-z]|[ivxlcdm]{1,4})\)\s*', raw_text)) or raw_text.startswith(('()', '( '))
@@ -653,7 +669,7 @@ def main():
     parser.add_argument("--no-orientation", action="store_true", help="Disable 360-degree orientation detection")
 
     # Quality Assurance flags
-    parser.add_argument("--highlight-low-confidence", action="store_true", help="Highlight low-confidence (<60%) text runs in soft yellow")
+    parser.add_argument("--highlight-low-confidence", action="store_true", help="Highlight low-confidence (<60%%) text runs in soft yellow")
     parser.add_argument("--qa-audit", action="store_true", help="Print detailed quality assurance & self-healing audit report")
 
     args = parser.parse_args()

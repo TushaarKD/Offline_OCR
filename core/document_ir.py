@@ -70,6 +70,7 @@ class TableCellModel:
     rowspan: int = 1
     colspan: int = 1
     is_header: bool = False
+    is_bold: bool = False
     bg_color_hex: Optional[str] = None  # e.g. "EAEAEA"
     alignment: str = "LEFT"  # "LEFT", "RIGHT", "CENTER"
     confidence: Optional[float] = None

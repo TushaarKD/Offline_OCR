@@ -228,8 +228,10 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
 
     tblPr.append(tblBorders)
 
-    # Header row underline (separates header labels from data records)
-    if num_rows > 1:
+    has_genuine_header = len(t_model.rows) > 0 and any(c.is_header for c in t_model.rows[0])
+
+    # Header row underline (separates header labels from data records, only if table has genuine header)
+    if has_genuine_header and num_rows > 1:
         for cell in table.rows[0].cells:
             tcPr = cell._tc.get_or_add_tcPr()
             tcBorders = tcPr.find(qn('w:tcBorders'))
@@ -243,10 +245,10 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             b.set(qn('w:color'), '333333')
             tcBorders.append(b)
 
-    # If the last row contains totals, add a clean top border line above it
+    # If the last row contains totals or closing balances, add a clean top border line above it
     if num_rows > 2:
         last_row_data = t_model.rows[-1]
-        is_total_row = any('total' in c.text.lower() or 'net' in c.text.lower() for c in last_row_data)
+        is_total_row = any('total' in c.text.lower() or 'net' in c.text.lower() or 'balance' in c.text.lower() for c in last_row_data)
         if not is_total_row and last_row_data[0].text.strip() == "" and any(c.text.strip() for c in last_row_data[1:]):
             is_total_row = True
         if is_total_row:
@@ -262,6 +264,25 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
                 b.set(qn('w:space'), '0')
                 b.set(qn('w:color'), '333333')
                 tcBorders.append(b)
+
+        # Intermediate subtotal lines: if col 0 is empty and an amount column has a value
+        for r_idx in range(1, num_rows - 1):
+            row_data = t_model.rows[r_idx]
+            if not row_data[0].text.strip() and any(c.text.strip() for c in row_data[1:]):
+                for c_idx, c_data in enumerate(row_data):
+                    if c_data.text.strip():
+                        cell = table.cell(r_idx, c_idx)
+                        tcPr = cell._tc.get_or_add_tcPr()
+                        tcBorders = tcPr.find(qn('w:tcBorders'))
+                        if tcBorders is None:
+                            tcBorders = OxmlElement('w:tcBorders')
+                            tcPr.append(tcBorders)
+                        b = OxmlElement('w:top')
+                        b.set(qn('w:val'), 'single')
+                        b.set(qn('w:sz'), '4')
+                        b.set(qn('w:space'), '0')
+                        b.set(qn('w:color'), '333333')
+                        tcBorders.append(b)
 
     # Determine column widths
     if t_model.col_widths_inches and len(t_model.col_widths_inches) == num_cols:
@@ -289,7 +310,7 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
         trPr.append(OxmlElement('w:cantSplit'))
         is_row_header = False
         if r_idx == 0:
-            is_row_header = True
+            is_row_header = has_genuine_header
         elif r_idx < len(t_model.rows):
             is_row_header = all(c.is_header for c in t_model.rows[r_idx] if c.text.strip())
         if is_row_header:
@@ -328,13 +349,15 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             # Add runs
             if cell_data.runs:
                 for r in cell_data.runs:
+                    if getattr(cell_data, 'is_bold', False) or (cell_data.is_header and has_genuine_header):
+                        r.is_bold = True
                     _compile_run(p, r)
             else:
                 run = p.add_run(cell_data.text)
                 run.font.name = "Calibri"
                 run.font.size = Pt(9.5)
                 run.font.color.rgb = RGBColor(0, 0, 0)
-                if cell_data.is_header:
+                if cell_data.is_header or getattr(cell_data, 'is_bold', False):
                     run.bold = True
                 if cell_data.highlight_color:
                     try:
@@ -348,7 +371,7 @@ def _compile_table(doc: Document, t_model: TableModel, page_content_width: float
             # Background shading
             if cell_data.bg_color_hex:
                 _set_cell_shading(target_cell, cell_data.bg_color_hex)
-            elif cell_data.is_header:
+            elif cell_data.is_header and has_genuine_header:
                 _set_cell_shading(target_cell, "F2F4F7")
 
     # Add spacing after table

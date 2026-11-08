@@ -80,6 +80,51 @@ def _detect_cell_alignment(text: str, is_header: bool) -> str:
     return "LEFT"
 
 
+def is_genuine_table_header(row_texts: List[str]) -> bool:
+    """
+    Determines if row 0 of a table is a genuine column header row
+    (e.g. 'Particulars | ₹ | Particulars | ₹' or 'In flows | Out flows')
+    vs. a data transaction row (e.g. 'Receipts from customers | 2,783').
+    """
+    for t in row_texts:
+        s = t.strip()
+        if not s:
+            continue
+        clean_num = s.replace(',', '').replace('(', '').replace(')', '').replace('₹', '').strip()
+        if clean_num.isdigit() and int(clean_num) > 10:
+            return False
+        if any(c.isdigit() for c in s) and (',' in s or '.' in s):
+            return False
+
+    header_keywords = {
+        'particulars', 'particular', 'details', 'description', 'account', 'head', 'item',
+        'inflow', 'inflows', 'outflow', 'outflows', 'in flows', 'out flows',
+        'receipts', 'payments', 'debit', 'credit', 'dr', 'cr',
+        '₹', 'rs.', 'amount', 'date', 'crores', 'lakhs'
+    }
+    combined = ' '.join(row_texts).lower()
+    return any(kw in combined for kw in header_keywords)
+
+
+def is_table_cell_bold(text: str, is_header: bool, is_total_row: bool = False) -> bool:
+    """Detect whether a table cell should be rendered in bold font."""
+    if is_header or is_total_row:
+        return True
+    s = text.strip()
+    if not s:
+        return False
+    # Section titles ending with colon: 'Operating Activities:', 'Opening balance:'
+    if s.endswith(':') or s.endswith(':-'):
+        return True
+    # Accounting statement category heads
+    if re.match(r'^(Cash\s+and\s+cash\s+equivalents\b|Cash\s+flows?\s+from|Net\s+cash|Net\s+increase|Net\s+decrease)\b', s, re.IGNORECASE):
+        return True
+    # Standalone totals and ledger balances
+    if re.match(r'^(Total|Closing\s+balance|Opening\s+balance|Balance\s+at)\b', s, re.IGNORECASE):
+        return True
+    return False
+
+
 def parse_html_table_to_model(
     html_str: str,
     crop_img: Optional[np.ndarray] = None,
@@ -264,6 +309,12 @@ def split_cross_column_tokens(items: List[Dict[str, Any]], dividers: List[int]) 
     return new_items
 
 
+def is_banner_noise(text: str) -> bool:
+    """Detect whether a text token is an author/institute watermark or page footer banner."""
+    up = re.sub(r'[^A-Z0-9]', '', text.upper())
+    return 'AGARWAL' in up or 'CAREERINSTITUTE' in up or 'AIR1CA' in up or 'PAGE5' in up
+
+
 def extract_geometric_table(crop_img: Optional[np.ndarray],
                             table_ocr_boxes: List[Any],
                             table_ocr_texts: List[str],
@@ -280,8 +331,7 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
     items = []
     for box, text in zip(table_ocr_boxes, table_ocr_texts):
         # Exclude watermark / author banner text accidentally caught in table crops
-        up = text.upper()
-        if 'AJAY AGARWAL' in up or 'AIR 1 CA' in up or 'CAREER INSTITUTE' in up:
+        if is_banner_noise(text):
             continue
         cleaned_t = clean_text_spacing(restore_currency_symbols(text.strip()))
         if not cleaned_t:
@@ -392,9 +442,15 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
         r.sort(key=lambda x: x['x0'])
 
     # 3. Construct TableCellModel grid
+    table_has_header = False
+    if rows:
+        row0_texts = [it['text'] for it in rows[0]]
+        table_has_header = is_genuine_table_header(row0_texts)
+
     grid: List[List[TableCellModel]] = []
     for r_idx, r in enumerate(rows):
-        is_hdr = (r_idx == 0)
+        is_hdr = (r_idx == 0 and table_has_header)
+        is_total = (r_idx == len(rows) - 1)
 
         # Check if single spanning row (e.g. section title like 'Operating Activities:')
         is_span = False
@@ -403,14 +459,16 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
                 is_span = True
 
         if is_span:
+            txt = clean_text_spacing(r[0]['text'])
             cell = TableCellModel(
                 row_idx=r_idx,
                 col_idx=0,
                 rowspan=1,
                 colspan=num_cols,
-                text=r[0]['text'],
+                text=txt,
                 is_header=False,
-                alignment=_detect_cell_alignment(r[0]['text'], False),
+                is_bold=is_table_cell_bold(txt, False, is_total),
+                alignment=_detect_cell_alignment(txt, False),
                 bg_color_hex=None
             )
             row_cells = [cell]
@@ -447,6 +505,7 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
 
         for c_cell in row_cells:
             c_cell.text = clean_text_spacing(c_cell.text)
+            c_cell.is_bold = is_table_cell_bold(c_cell.text, is_hdr, is_total)
             c_cell.alignment = _detect_cell_alignment(c_cell.text, is_hdr)
 
         grid.append(row_cells)
@@ -455,12 +514,14 @@ def extract_geometric_table(crop_img: Optional[np.ndarray],
         return None
 
     # T-account header healing: if 4 columns with Particulars/Inflows and ₹ in col 3, ensure col 1 has ₹
-    if len(grid) > 0 and num_cols == 4:
+    if len(grid) > 0 and num_cols == 4 and table_has_header:
         col0_t = grid[0][0].text.lower()
         col2_t = grid[0][2].text.lower()
         if ('particular' in col0_t or 'inflow' in col0_t) and ('particular' in col2_t or 'outflow' in col2_t):
             if '₹' in grid[0][3].text and not grid[0][1].text:
                 grid[0][1].text = '₹'
+                grid[0][1].is_header = True
+                grid[0][1].is_bold = True
                 grid[0][1].alignment = 'CENTER'
 
     # 4. Proportional widths
@@ -557,8 +618,7 @@ def build_fallback_table_model(table_ocr_boxes: List[Any],
     items = []
     for box, text in zip(table_ocr_boxes, table_ocr_texts):
         # Exclude watermark / author banner text accidentally caught in table crops
-        up = text.upper()
-        if 'AJAY AGARWAL' in up or 'AIR 1 CA' in up or 'CAREER INSTITUTE' in up:
+        if is_banner_noise(text):
             continue
         cleaned_t = clean_text_spacing(restore_currency_symbols(text.strip()))
         if not cleaned_t:
