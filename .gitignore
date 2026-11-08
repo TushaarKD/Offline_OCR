@@ -16,6 +16,13 @@ dist/
 build/
 *.spec
 
+# Test Samples & Documents (Local Only)
+samples/
+ilovepdf_split/
+docx/
+*.pdf
+*.docx
+
 # Temporary files
 *.tmp
 .DS_Store

@@ -1,51 +1,38 @@
-# AGENT GUIDELINES & PROJECT INSTRUCTIONS
+# AGENT GUIDELINES & CORE PROTOCOL
 
 ## ⚠️ STRICT GIT INSTRUCTION (MANDATORY)
 - **STRICTLY NEVER MAKE COMMITS**: The AI agent must NEVER run `git commit`, `git commit -m`, `git push`, `git rebase`, or create commits of any kind.
-- **Git is managed manually by the user**: The repository was initialized (`git init`) solely for the user to monitor, review diffs, and track changes.
-- The agent should only create or edit workspace files as requested by the user, leaving the git stage and commit history untouched.
+- **Git is managed manually by the user**: The repository was initialized solely for the user to monitor diffs, review changes, and commit at each milestone.
+- The agent must only create or edit workspace files, leaving git staging and commit creation exclusively to the user.
 
 ---
 
-## Project Overview
+## 🎯 CORE PROJECT GOAL
+To build an industry-standard, commercial-grade (Adobe Acrobat / ABBYY FineReader level) document conversion engine and standalone offline desktop application that converts scanned PDFs, images, and camera photos into **100% flow-editable Microsoft Word (`.docx`)** documents and companion **Markdown (`.md`)** files with **100% fidelity to the original document**.
 
-This repository (`OCR_Setup`) provides an automated, high-fidelity pipeline to convert complex, scanned or vector-outlined accounting PDFs into Markdown and Microsoft Word (`.docx`) documents with zero content loss.
-
-### Available Scripts & Tools
-
-1. **`pdf_to_markdown.py`**
-   - **Purpose**: Converts PDF documents into clean, structured Markdown.
-   - **Capabilities**:
-     - Dual-mode extraction: uses digital text extraction for native PDFs, and an ONNX-based neural OCR + Layout + Table pipeline for scanned/outlined PDFs.
-     - Single-pass OCR (`rapidocr_onnxruntime`) with line clustering and reading order reconstruction.
-     - Neural layout parsing (`rapid_layout`) to detect table regions, headers, and footers.
-     - Neural table structure recognition (`rapid_table` / `SLANet+`) to reconstruct complex accounting tables, balance sheets, and ledgers.
-     - Automatically restores Indian Rupee notation (`₹`) and formats headings (`# CHAPTER`, `### Question N`, `**Answer**`, list items `- (1)`).
-     - Multi-process parallelism (`ProcessPoolExecutor`) for fast multi-page batch conversion.
-   - **Usage**:
-     ```powershell
-     .\venv\Scripts\python.exe pdf_to_markdown.py <input.pdf> [-o output.md] [--dpi 150] [--workers 4] [--start-page 1] [--end-page 50]
-     ```
-
-2. **`markdown_to_docx.py`**
-   - **Purpose**: Converts Markdown files into professional Microsoft Word documents (`.docx`).
-   - **Capabilities**:
-     - Follows `python-docx` best practices (explicit letter/A4 geometry, 0.75" margins).
-     - Full table support: converts both GFM Markdown tables (`| ... |`) and HTML `<table>` elements with cell merges (`colspan` / `rowspan`).
-     - Sets column widths across every cell in every row for uniform rendering.
-     - Uses Word built-in styles (`Heading 1`, `Heading 2`, `Heading 3`, `List Bullet`) for native Word Table of Contents and navigation pane support.
-     - Preserves all text, questions, answers, amounts, and original pagination via page breaks (`<!-- Page N -->`).
-   - **Usage**:
-     ```powershell
-     .\venv\Scripts\python.exe markdown_to_docx.py <input.md> [-o output.docx] [--no-page-breaks]
-     ```
-
-3. **`docx/` Skill**:
-   - Contains reference scripts (`scripts/create_docx.py`, `scripts/read_docx.py`) and a dedicated venv for Word document manipulation and verification.
+### Key Tenets of the Core Goal:
+1. **100% Original Look & Feel**:
+   - The output Word document must look as though the original scanned PDF was exported directly from it: preserving exact typography, fonts, point sizes, colors, inline bolding, paragraph spacing, alignments, and native Word tables.
+2. **Absolute Zero-Manipulation Protocol**:
+   - **Never manipulate, compute, alter, or hallucinate raw numbers, calculations, ledger balances, currency symbols, or text.**
+   - **Never perform destructive "self-healing" or arithmetic recalculation** that clamps, second-guesses, or alters raw OCR table structures or data. Every number and cell must remain 100% authentic to the source document.
+3. **Native Word Flow Architecture**:
+   - Construct all documents using native Word flow elements (margins, section columns, paragraphs, native tables, inline shapes) rather than fragile floating text-boxes, ensuring natural, non-overlapping editing.
+4. **100% Offline & Standalone**:
+   - Runs completely offline with bundled local ONNX models, packaged as a portable Windows desktop application.
 
 ---
 
-## Python Environment
-- Primary venv: `D:\Work_dsi\2026\OCR_Setup\venv` (Python 3.11)
-- Installed dependencies: `pymupdf`, `pymupdf4llm`, `rapidocr_onnxruntime`, `rapid_layout`, `rapid_table`, `beautifulsoup4`, `python-docx`, `onnxruntime`, `opencv-python`.
+## 📋 RULES FOR `PLAN.md` GENERATION & EXECUTION
+Whenever new issues, bugs, logs, or visual discrepancies are identified, the agent must generate and maintain a structured, phased roadmap in `PLAN.md` adhering to the following rules:
 
+1. **Root-Cause Phasing**:
+   - Every issue found must be traced to its exact technical root cause and assigned to a clear, dedicated phase.
+2. **Strict Phase-by-Phase Execution**:
+   - Always execute the plan step-by-step in sequential order. Never skip steps, rush ahead, or drift away from the active plan.
+3. **Alignment with Core Goal**:
+   - Every task in `PLAN.md` must directly serve the core goal: raw authenticity, zero computation tampering, exact visual formatting, and native flow editability.
+4. **Verifiable Quality Gates**:
+   - Each phase must conclude with an automated or visual quality verification test before declaring completion.
+5. **Living Source of Truth**:
+   - `PLAN.md` remains the active guiding document across conversation turns to ensure zero context loss and zero drifting.
