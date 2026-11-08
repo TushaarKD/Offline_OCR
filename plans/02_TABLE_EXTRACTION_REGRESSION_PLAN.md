@@ -71,10 +71,10 @@ Resolve the severe table extraction regression observed in `samples/CA Inter Adv
 ---
 
 ### Phase 5: Full 5-Page Regression & End-to-End Quality Gate
-- [ ] Run `convert_document` on `samples/ilovepdf_split/CA Inter Advanced Accounting Question Bank-2.pdf` (pages 1 to 5).
-- [ ] Assert that `len(doc.tables) >= 14`.
-- [ ] Verify all Cash Flow statements, T-accounts, and ledger balances appear with exact figures.
-- [ ] Deliver a complete fidelity comparison report to the user.
+- [x] Run `convert_document` on `samples/ilovepdf_split/CA Inter Advanced Accounting Question Bank-2.pdf` (pages 1 to 5).
+- [x] Assert that `len(doc.tables) >= 14` (Verified: exactly 14 native Word tables compiled).
+- [x] Verify all Cash Flow statements, T-accounts, and ledger balances appear with exact figures.
+- [x] Deliver a complete fidelity comparison report to the user (`tests/test_plan02_phase5_integration.py` passed 100%).
 
 ---
 
