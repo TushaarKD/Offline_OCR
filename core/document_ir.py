@@ -17,6 +17,7 @@ class RunModel:
     font_size_pt: float = 10.5
     is_bold: bool = False
     is_italic: bool = False
+    is_underline: bool = False
     is_code: bool = False
     color_hex: Optional[str] = None  # e.g. "003366" or None for default
     highlight_color: Optional[str] = None  # e.g. "YELLOW", "CYAN", etc.
@@ -40,7 +41,7 @@ class ParagraphModel:
         return "".join(r.text for r in self.runs)
 
     def add_run(self, text: str, font_size_pt: float = 10.5, is_bold: bool = False,
-                is_italic: bool = False, is_code: bool = False,
+                is_italic: bool = False, is_underline: bool = False, is_code: bool = False,
                 color_hex: Optional[str] = None,
                 highlight_color: Optional[str] = None,
                 confidence: Optional[float] = None) -> RunModel:
@@ -49,6 +50,7 @@ class ParagraphModel:
             font_size_pt=font_size_pt,
             is_bold=is_bold,
             is_italic=is_italic,
+            is_underline=is_underline,
             is_code=is_code,
             color_hex=color_hex,
             highlight_color=highlight_color,

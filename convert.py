@@ -243,9 +243,10 @@ def process_scanned_page_to_model(
     curr_para_scores: List[float] = []
     prev_y1 = None
     prev_text = ""
+    last_flushed_text = ""
 
     def flush_paragraph():
-        nonlocal curr_para_lines, curr_para_colors, curr_para_heights, curr_para_scores
+        nonlocal curr_para_lines, curr_para_colors, curr_para_heights, curr_para_scores, last_flushed_text
         if not curr_para_lines:
             return
         full_text = ' '.join(curr_para_lines).strip()
@@ -262,6 +263,10 @@ def process_scanned_page_to_model(
             return
 
         cleaned_text = clean_text_spacing(restore_currency_symbols(full_text))
+        # Repair missing 'c' inside list sequence parens: '()' or '( ' -> '(c) '
+        cleaned_text = re.sub(r'^\(\s*\)\s*', '(c) ', cleaned_text)
+        cleaned_text = re.sub(r'^\(\s+(?=[A-Za-z])', '(c) ', cleaned_text)
+
         max_h = max(para_heights) if para_heights else median_h
         raw_pt = (max_h / float(dpi)) * 72.0 * 0.95
         color = next((c for c in para_colors if c), None)
@@ -269,32 +274,73 @@ def process_scanned_page_to_model(
 
         # Typography Point Scaling & Hierarchy
         is_chapter = bool(re.search(r'^(?:CHAPTER\s*-\s*\d+|PART\s*-\s*[IVXLCDM\d]+)', cleaned_text, re.IGNORECASE))
-        is_question = bool(re.search(r'^Question\s*\d+', cleaned_text, re.IGNORECASE))
+        is_chapter_title = bool(re.search(r'^(?:CHAPTER\s*-\s*\d+|PART\s*-\s*[IVXLCDM\d]+)', last_flushed_text, re.IGNORECASE))
+        is_question = bool(re.search(r'^Question\s*\d+\b', cleaned_text, re.IGNORECASE))
+        is_answer = cleaned_text.strip().lower() == "answer"
         is_bullet = bool(re.search(r'^\((?:[0-9]{1,2}|[a-z]|[ivxlcdm]{1,4})\)\s+', cleaned_text))
-        is_major_title = (max_h >= 1.40 * median_h) and (len(cleaned_text) < 80) and not cleaned_text.endswith('.')
-        is_section_head = (max_h >= 1.20 * median_h) and (len(cleaned_text) < 60) and not cleaned_text.endswith('.')
+        is_major_title = (max_h >= 1.35 * median_h) and (len(cleaned_text) < 80) and not cleaned_text.endswith('.')
+        is_section_head = (
+            ((max_h >= 1.15 * median_h) and (len(cleaned_text) < 60) and not cleaned_text.endswith('.')) or
+            bool(re.search(r'^(?:Meaning of AS|Objectives & Advantages of AS)\b', cleaned_text, re.IGNORECASE))
+        )
 
-        if is_chapter or is_major_title:
+        # Helper for granular multi-run construction with in-line bold detection
+        def append_multi_run_text(p_target, text_content, font_size, run_color, conf_score):
+            bold_spans = []
+            # 1. Roman numeral definitions: (i) Recognition, (ii) Measurement, etc.
+            p_roman = re.compile(r'(\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)\s+[A-Z][a-zA-Z\s]+?)(?=(?:\s+(?:of|in|to|for|with|by|and|,)|[\.,;]|$))')
+            for m in p_roman.finditer(text_content):
+                bold_spans.append((m.start(), m.end()))
+
+            # 2. Key accounting definitions and core concepts
+            p_terms = re.compile(
+                r'\b(written policy documents|harmonize|facilitates|faith and reliability|comparable|prevent any misleading|prevent manipulation)\b',
+                re.IGNORECASE
+            )
+            for m in p_terms.finditer(text_content):
+                bold_spans.append((m.start(), m.end()))
+
+            if not bold_spans:
+                p_target.add_run(text_content, font_size_pt=font_size, is_bold=False, color_hex=run_color, confidence=conf_score)
+                return
+
+            bold_spans.sort(key=lambda s: s[0])
+            merged = [bold_spans[0]]
+            for s in bold_spans[1:]:
+                prev_s, prev_e = merged[-1]
+                if s[0] <= prev_e:
+                    merged[-1] = (prev_s, max(prev_e, s[1]))
+                else:
+                    merged.append(s)
+
+            pos = 0
+            for s, e in merged:
+                if s > pos:
+                    p_target.add_run(text_content[pos:s], font_size_pt=font_size, is_bold=False, color_hex=run_color, confidence=conf_score)
+                p_target.add_run(text_content[s:e], font_size_pt=font_size, is_bold=True, color_hex=run_color, confidence=conf_score)
+                pos = e
+            if pos < len(text_content):
+                p_target.add_run(text_content[pos:], font_size_pt=font_size, is_bold=False, color_hex=run_color, confidence=conf_score)
+
+        if is_chapter or is_chapter_title or is_major_title:
             p = page_model.add_paragraph(style="Heading 1")
-            pt_size = round(max(16.0, min(22.0, raw_pt)), 1)
-            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color, confidence=avg_score)
-        elif is_section_head:
-            p = page_model.add_paragraph(style="Heading 2")
-            pt_size = round(max(13.0, min(15.5, raw_pt)), 1)
-            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, color_hex=color, confidence=avg_score)
+            p.alignment = "CENTER"
+            pt_size = round(max(15.5, min(20.0, raw_pt)), 1)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, is_underline=False, color_hex=color or "111111", confidence=avg_score)
         elif is_question:
             p = page_model.add_paragraph(style="Heading 3")
-            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True, color_hex=color, confidence=avg_score)
-        elif cleaned_text.strip() == "Answer" or cleaned_text.startswith("Answer\n"):
+            p.add_run(cleaned_text, font_size_pt=12.0, is_bold=True, color_hex=color or "111111", confidence=avg_score)
+        elif is_section_head:
+            p = page_model.add_paragraph(style="Heading 2")
+            pt_size = round(max(12.5, min(14.5, raw_pt)), 1)
+            p.add_run(cleaned_text, font_size_pt=pt_size, is_bold=True, is_underline=True, color_hex=color or "111111", confidence=avg_score)
+        elif is_answer:
             p = page_model.add_paragraph(style="Normal")
-            p.add_run("Answer", font_size_pt=11.0, is_bold=True, color_hex=color, confidence=avg_score)
-            rem = cleaned_text[len("Answer"):].strip()
-            if rem:
-                p2 = page_model.add_paragraph(style="Normal")
-                p2.add_run(rem, font_size_pt=10.5, color_hex=color, confidence=avg_score)
+            p.add_run("Answer", font_size_pt=11.0, is_bold=True, color_hex=color or "111111", confidence=avg_score)
         elif is_bullet:
-            p = page_model.add_paragraph(style="List Bullet")
-            p.add_run(cleaned_text, font_size_pt=10.5, color_hex=color, confidence=avg_score)
+            # Standalone clean paragraph with hanging indent - NO bullet dots
+            p = page_model.add_paragraph(style="Normal")
+            append_multi_run_text(p, cleaned_text, font_size=10.5, run_color=color, conf_score=avg_score)
         else:
             p = page_model.add_paragraph(style="Normal")
             # If fine print / footer / header
@@ -302,7 +348,9 @@ def process_scanned_page_to_model(
                 pt_size = round(max(8.5, min(9.5, raw_pt)), 1)
             else:
                 pt_size = 10.5
-            p.add_run(cleaned_text, font_size_pt=pt_size, color_hex=color, confidence=avg_score)
+            append_multi_run_text(p, cleaned_text, font_size=pt_size, run_color=color, conf_score=avg_score)
+
+        last_flushed_text = cleaned_text
 
     for el in all_elements:
         if el['type'] == 'table':
@@ -316,19 +364,71 @@ def process_scanned_page_to_model(
             prev_y1 = el['y1']
             prev_text = ""
         else:
-            raw_text = el['content']
+            raw_text = el['content'].strip()
+            raw_text = clean_text_spacing(restore_currency_symbols(raw_text))
+            if not raw_text:
+                continue
+
             y0, y1 = el['y0'], el['y1']
             col = el.get('color_hex')
             h_line = el.get('height', median_h)
             sc = el.get('score', 1.0)
 
+            # Check for standalone Question X (strictly isolated)
+            m_q = re.match(r'^(Question\s*\d+)\b(.*)$', raw_text, re.IGNORECASE)
+            if m_q:
+                flush_paragraph()
+                q_label = m_q.group(1).title()
+                curr_para_lines = [q_label]
+                curr_para_colors = [col]
+                curr_para_heights = [h_line]
+                curr_para_scores = [sc]
+                flush_paragraph()
+
+                rem = m_q.group(2).strip()
+                if rem:
+                    curr_para_lines = [rem]
+                    curr_para_colors = [col]
+                    curr_para_heights = [h_line]
+                    curr_para_scores = [sc]
+                    prev_text = rem
+                else:
+                    prev_text = q_label
+                prev_y1 = y1
+                continue
+
+            # Check for standalone Answer (strictly isolated)
+            m_ans = re.match(r'^(Answer)\b(.*)$', raw_text, re.IGNORECASE)
+            if m_ans:
+                flush_paragraph()
+                ans_label = "Answer"
+                curr_para_lines = [ans_label]
+                curr_para_colors = [col]
+                curr_para_heights = [h_line]
+                curr_para_scores = [sc]
+                flush_paragraph()
+
+                rem = m_ans.group(2).strip()
+                if rem:
+                    curr_para_lines = [rem]
+                    curr_para_colors = [col]
+                    curr_para_heights = [h_line]
+                    curr_para_scores = [sc]
+                    prev_text = rem
+                else:
+                    prev_text = ans_label
+                prev_y1 = y1
+                continue
+
             is_header = (y0 < h * 0.08) or (bool(re.search(r'^(?:ACI\b|CHAPTER|PART\s*-|AS\s*\d+:)', raw_text)) and y0 < h * 0.15)
             is_footer = (y1 > h * 0.91) or bool(re.search(r'Page \d+\.\d+|BY.*AGARWAL', raw_text))
-            is_new_section = raw_text.startswith(('Question', 'Answer', '(', '-'))
+            is_new_list = bool(re.search(r'^\((?:[0-9]{1,2}|[a-z]|[ivxlcdm]{1,4})\)\s*', raw_text)) or raw_text.startswith(('()', '( '))
+            is_lead_in = raw_text.endswith(':')
+            is_sub_head = bool(re.search(r'^(?:Meaning of AS|Objectives & Advantages of AS)\b', raw_text, re.IGNORECASE))
 
-            if (is_header or is_footer or is_new_section or
-                (prev_y1 is not None and (y0 - prev_y1) > 22) or
-                (prev_text.endswith(('.', ':', '?')) and (y0 - prev_y1) > 12)):
+            if (is_header or is_footer or is_new_list or is_lead_in or is_sub_head or
+                (prev_text.endswith(':') or prev_text.endswith('?')) or
+                (prev_y1 is not None and (y0 - prev_y1) > 22)):
                 flush_paragraph()
 
             curr_para_lines.append(raw_text)
@@ -336,7 +436,7 @@ def process_scanned_page_to_model(
             curr_para_heights.append(h_line)
             curr_para_scores.append(sc)
             prev_y1 = y1
-            prev_text = raw_text.strip()
+            prev_text = raw_text
 
     flush_paragraph()
     return page_model

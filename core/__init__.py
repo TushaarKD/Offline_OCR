@@ -10,7 +10,6 @@ from .docx_compiler import compile_document
 from .qa_auditor import (
     validate_and_heal_table,
     audit_document,
-    audit_accounting_table,
     apply_low_confidence_highlighting,
     generate_qa_summary_markdown
 )

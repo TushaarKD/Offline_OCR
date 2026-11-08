@@ -1,9 +1,10 @@
 # AGENT GUIDELINES & CORE PROTOCOL
 
 ## ⚠️ STRICT GIT INSTRUCTION (MANDATORY)
-- **STRICTLY NEVER MAKE COMMITS**: The AI agent must NEVER run `git commit`, `git commit -m`, `git push`, `git rebase`, or create commits of any kind.
+- **STRICTLY NO GIT ACTIONS FROM YOUR SIDE UNTIL ASKED EXPLICITLY**: The AI agent must NEVER run `git commit`, `git commit -m`, `git push`, `git rebase`, `git tag`, or create commits of any kind unless the user explicitly asks for it in the prompt.
+- **Ask when in doubt**: If you are ever not sure at some places regarding git or project state, ask the user before taking action.
 - **Git is managed manually by the user**: The repository was initialized solely for the user to monitor diffs, review changes, and commit at each milestone.
-- The agent must only create or edit workspace files, leaving git staging and commit creation exclusively to the user.
+- The agent must only create or edit workspace files, leaving git staging and commit creation exclusively to the user unless explicitly commanded.
 
 ---
 
@@ -23,16 +24,21 @@ To build an industry-standard, commercial-grade (Adobe Acrobat / ABBYY FineReade
 
 ---
 
-## 📋 RULES FOR `PLAN.md` GENERATION & EXECUTION
-Whenever new issues, bugs, logs, or visual discrepancies are identified, the agent must generate and maintain a structured, phased roadmap in `PLAN.md` adhering to the following rules:
+## 📋 RULES FOR `PLAN.md` GENERATION & STEP-BY-STEP IMPLEMENTATION
+Whenever new issues, bugs, logs, or visual discrepancies are identified, the agent must strictly adhere to the following workflow:
 
-1. **Root-Cause Phasing**:
+1. **Plan First Every Time (Divided into Clear Phases)**:
+   - **Always create the plan first**: Before writing or modifying any implementation code, a structured, dedicated plan MUST be created.
+   - **Phased Division Aligned with Main Goal**: The plan must be broken down into clear, logical phases, with every single task directly serving the core project goal (100% flow-editable output, 100% visual fidelity, Zero-Manipulation Protocol).
+2. **One Step / One Phase at a Time Implementation (Mandatory)**:
+   - **Strictly one step at once**: While implementing, ONLY ONE STEP OR PHASE MUST BE IMPLEMENTED AT A TIME.
+   - **Never bundle or rush multiple phases**: Do not implement multiple phases in a single turn. Complete the active phase, verify it with an automated test, report the results, and pause for user review/confirmation before moving to the next phase.
+3. **Dedicated `plans/` Directory with Unique Names**:
+   - All plan documents MUST reside in the git-tracked `plans/` folder.
+   - Each plan file MUST have a **unique, clearly identifiable name** (e.g. `plans/00_MASTER_ROADMAP.md`, `plans/01_BACKEND_FIDELITY_PLAN.md`, `plans/02_...md`) so progress is structured, unambiguous, and easily tracked over time.
+4. **Root-Cause Phasing**:
    - Every issue found must be traced to its exact technical root cause and assigned to a clear, dedicated phase.
-2. **Strict Phase-by-Phase Execution**:
-   - Always execute the plan step-by-step in sequential order. Never skip steps, rush ahead, or drift away from the active plan.
-3. **Alignment with Core Goal**:
-   - Every task in `PLAN.md` must directly serve the core goal: raw authenticity, zero computation tampering, exact visual formatting, and native flow editability.
-4. **Verifiable Quality Gates**:
-   - Each phase must conclude with an automated or visual quality verification test before declaring completion.
-5. **Living Source of Truth**:
-   - `PLAN.md` remains the active guiding document across conversation turns to ensure zero context loss and zero drifting.
+5. **Verifiable Quality Gates**:
+   - Each phase must conclude with an automated unit/regression or visual verification test before declaring completion.
+6. **Living Source of Truth**:
+   - The active plan remains the single source of truth across conversation turns to ensure zero context loss and zero drifting.

@@ -48,7 +48,9 @@ def get_ocr_engine():
         rec_path = get_local_model_path("ch_PP-OCRv4_rec_infer.onnx")
         cls_path = get_local_model_path("ch_ppocr_mobile_v2.0_cls_infer.onnx")
 
-        kwargs = {}
+        # Disable crop-level text_cls (use_cls=False): page-level orientation is already
+        # handled by image_preprocessor.py, and crop-level cls falsely inverts English lines.
+        kwargs = {"use_cls": False}
         if os.path.exists(det_path):
             kwargs["Det_model_path"] = det_path
         if os.path.exists(rec_path):
@@ -80,8 +82,9 @@ def get_table_engine():
         from rapid_table import RapidTable, RapidTableInput
         table_path = get_local_model_path("slanet-plus.onnx")
         if os.path.exists(table_path):
-            cfg = RapidTableInput(model_dir_or_path=table_path)
+            cfg = RapidTableInput(model_dir_or_path=table_path, use_ocr=False)
             _table_instance = RapidTable(cfg=cfg)
         else:
-            _table_instance = RapidTable()
+            cfg = RapidTableInput(use_ocr=False)
+            _table_instance = RapidTable(cfg=cfg)
     return _table_instance

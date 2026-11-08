@@ -63,7 +63,7 @@ def _apply_alignment(paragraph, alignment_str: str):
     paragraph.alignment = align_map.get(alignment_str.upper(), WD_ALIGN_PARAGRAPH.LEFT)
 
 
-def _compile_run(paragraph, run_model: RunModel):
+def _compile_run(paragraph, run_model: RunModel, is_heading: bool = False):
     """Add a styled run to a Word paragraph."""
     run = paragraph.add_run(run_model.text)
     if run_model.is_code:
@@ -78,6 +78,8 @@ def _compile_run(paragraph, run_model: RunModel):
         run.bold = True
     if run_model.is_italic:
         run.italic = True
+    if getattr(run_model, 'is_underline', False):
+        run.underline = True
 
     if run_model.color_hex:
         try:
@@ -85,6 +87,9 @@ def _compile_run(paragraph, run_model: RunModel):
             run.font.color.rgb = RGBColor.from_string(hex_clean)
         except Exception:
             pass
+    elif is_heading:
+        # Guarantee black heading text to prevent Microsoft Word's default blue theme
+        run.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
 
     if run_model.highlight_color:
         try:
@@ -99,9 +104,10 @@ def _compile_run(paragraph, run_model: RunModel):
 def _compile_paragraph(doc: Document, p_model: ParagraphModel):
     """Compile ParagraphModel to a native Word paragraph with typography spacing."""
     style_name = p_model.style or "Normal"
+    is_heading = style_name.startswith("Heading")
 
     # Add paragraph with specific built-in style
-    if style_name.startswith("Heading"):
+    if is_heading:
         try:
             level = int(style_name.split()[-1])
             p = doc.add_heading(level=level)
@@ -138,7 +144,7 @@ def _compile_paragraph(doc: Document, p_model: ParagraphModel):
     p.paragraph_format.line_spacing = p_model.line_spacing
 
     for r_model in p_model.runs:
-        _compile_run(p, r_model)
+        _compile_run(p, r_model, is_heading=is_heading)
 
 
 def _compile_table(doc: Document, t_model: TableModel, page_content_width: float = 7.0):
@@ -308,6 +314,24 @@ def compile_document(doc_model: DocumentModel, output_path: str) -> str:
     normal_style.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
     normal_style.paragraph_format.space_after = Pt(3)
     normal_style.paragraph_format.line_spacing = 1.15
+
+    # Configure Heading styles to pin Black typography (eliminates Word's default blue #2E74B5)
+    for h_name, h_size, h_before, h_after in [
+        ('Heading 1', 16.0, 12, 4),
+        ('Heading 2', 13.5, 8, 3),
+        ('Heading 3', 12.0, 6, 2),
+    ]:
+        try:
+            h_style = doc.styles[h_name]
+            h_style.font.name = 'Calibri'
+            h_style.font.size = Pt(h_size)
+            h_style.font.bold = True
+            h_style.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+            h_style.paragraph_format.space_before = Pt(h_before)
+            h_style.paragraph_format.space_after = Pt(h_after)
+            h_style.paragraph_format.line_spacing = 1.15
+        except Exception:
+            pass
 
     for p_idx, page in enumerate(doc_model.pages):
         # Insert native page break between pages

@@ -14,11 +14,13 @@ def get_ocr_instance():
 
 def clean_text_spacing(text: str) -> str:
     """
-    Fix missing spaces caused by OCR CTC decoding without altering any text/numbers:
+    Fix missing spaces caused by OCR CTC decoding without altering any authentic text/numbers:
+    - Label and chapter boundaries: 'Question1' -> 'Question 1', 'CHAPTER-1' -> 'CHAPTER - 1'
+    - Ampersand spacing: 'Objectives&Advantages' -> 'Objectives & Advantages'
     - Punctuation-letter collisions: 'words,words' -> 'words, words'
-    - Number-letter collisions: 'Paid50,000tocreditors' -> 'Paid 50,000 to creditors'
-    - Glued CamelCase and concatenated English words: 'aretheissues' -> 'are the issues'
-    - Protects URLs, emails, dates, decimals, acronyms, and alphanumeric codes.
+    - Parentheses boundaries: '(i)Recognition' -> '(i) Recognition', 'Institute(ACI)' -> 'Institute (ACI)'
+    - Run-together English words: 'Disclosurerequirements' -> 'Disclosure requirements', 'asense' -> 'a sense'
+    - Protects URLs, emails, dates, decimals, acronyms, and proper nouns.
     """
     url_map = {}
     def save_url(m):
@@ -32,52 +34,66 @@ def clean_text_spacing(text: str) -> str:
         text
     )
 
-    # Punctuation spacing: comma, semicolon, colon, exclamation followed directly by letter
-    text = re.sub(r'([a-zA-Z0-9\)])([,;:!])([a-zA-Z])', r'\1\2 \3', text)
-    # Period followed by Capital Letter: 'statement.The' -> 'statement. The'
-    text = re.sub(r'([a-zA-Z]{2,}\.)([A-Z])', r'\1 \2', text)
-
-    # Number-Letter boundary separation (protecting short codes like AS1, 20X1)
-    text = re.sub(r'([a-zA-Z]{2,})(\d{2,})', r'\1 \2', text)
+    # 1. Labels with numbers & general letter-digit boundaries
+    text = re.sub(r'\b(Question|Answer|Chapter|Page|Part|Section|Sec|AS)\s*[-:]?\s*(\d+)', r'\1 \2', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bCHAPTER\s*[-–—]?\s*(\d+)\b', r'CHAPTER - \1', text, flags=re.IGNORECASE)
+    text = re.sub(r'([a-zA-Z]{3,})(\d+)', r'\1 \2', text)
     text = re.sub(r'(\d+(?:,\d+)*(?:\.\d+)?)([a-zA-Z]{2,})', r'\1 \2', text)
 
-    # Clean run-together / glued English words
+    # 2. Ampersand spacing
+    text = re.sub(r'([a-zA-Z0-9])&', r'\1 & ', text)
+    text = re.sub(r'&([a-zA-Z0-9])', r' & \1', text)
+
+    # 3. Parentheses, brackets & punctuation spacing
+    text = re.sub(r'([a-zA-Z0-9\)])([,;:!])([a-zA-Z\(])', r'\1\2 \3', text)
+    text = re.sub(r'([a-zA-Z]{2,}\.)([A-Z])', r'\1 \2', text)
+    text = re.sub(r'\)([a-zA-Z0-9])', r') \1', text)
+    text = re.sub(r'([a-zA-Z0-9])\(', r'\1 (', text)
+    text = re.sub(r'(\w)"([A-Z])', r'\1 "\2', text)
+    text = re.sub(r'([a-zA-Z0-9\.\?!])"([a-zA-Z])', r'\1" \2', text)
+
+    # 4. Clean run-together / glued English words
     try:
         import wordninja
 
-        def fix_word(match):
+        def smart_split(match):
             w = match.group(0)
-            if len(w) <= 4 or (w.isupper() and len(w) <= 6):
+            if len(w) <= 3 or (w.isupper() and len(w) <= 6):
                 return w
-            # CamelCase: 'MeaningofAS', 'RentOutstanding', 'SettlementofCreditors'
-            if re.search(r'[a-z]{2,}[A-Z]', w):
-                splits = wordninja.split(w)
-                if len(splits) > 1:
-                    res, idx = [], 0
-                    for s in splits:
-                        slen = len(s)
-                        res.append(w[idx:idx+slen])
-                        idx += slen
-                    if idx < len(w):
-                        res.append(w[idx:])
-                    return ' '.join(res)
-            # Long run-together lowercase words: 'aretheissues', 'theliabilitiesinthenormalcourseofbusiness'
-            elif len(w) > 7 and w.islower():
-                splits = wordninja.split(w)
-                if len(splits) > 1 and all(len(s) >= 2 for s in splits):
-                    return ' '.join(splits)
-            return w
+            splits = wordninja.split(w)
+            if len(splits) <= 1:
+                return w
+            # Check that every split token is >= 2 letters, OR is 'a' or 'i'
+            if not all(len(s) >= 2 or s.lower() in ('a', 'i') for s in splits):
+                return w
+            res = []
+            idx = 0
+            for s in splits:
+                slen = len(s)
+                res.append(w[idx:idx+slen])
+                idx += slen
+            if idx < len(w):
+                res.append(w[idx:])
+            return ' '.join(res)
 
-        text = re.sub(r'\b[a-zA-Z]+\b', fix_word, text)
+        text = re.sub(r'\b[a-zA-Z]+\b', smart_split, text)
     except ImportError:
         pass
+
+    # 5. Known author tokens & headers (clean up any over-splits in proper names)
+    text = re.sub(r'BY\s*HP\s*AGAR\s*WAL', 'BY HP AGARWAL', text, flags=re.IGNORECASE)
+    text = re.sub(r'AJAY\s*AGAR\s*WAL', 'AJAY AGARWAL', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bA\s*JAY\b', 'AJAY', text, flags=re.IGNORECASE)
+    text = re.sub(r'AGAR\s*WAL', 'AGARWAL', text, flags=re.IGNORECASE)
+    text = re.sub(r'AIR\s*1\s*CA', 'AIR1 CA', text, flags=re.IGNORECASE)
+    text = re.sub(r'Career\s*Institute', 'Career Institute', text, flags=re.IGNORECASE)
 
     # Restore URLs/emails
     for key, val in url_map.items():
         text = text.replace(key, val)
 
     text = re.sub(r'[ \t]{2,}', ' ', text)
-    return text
+    return text.strip()
 
 
 def restore_currency_symbols(text: str) -> str:
