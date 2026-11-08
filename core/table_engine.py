@@ -5,9 +5,12 @@ Extracts 2D cell matrices, spans, alignments, border styles, and background shad
 
 from typing import List, Tuple, Dict, Any, Optional
 import re
+import logging
 import numpy as np
 import cv2
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger("OCRTableEngine")
 
 from core.document_ir import TableModel, TableCellModel
 from core.ocr_engine import clean_text_spacing, restore_currency_symbols
@@ -182,12 +185,19 @@ def extract_table_model(crop_img: np.ndarray,
     """Runs SLANet+ neural table extraction and returns a populated TableModel."""
     table_engine = get_table_instance()
     try:
-        if table_ocr_boxes:
-            out = table_engine(crop_img, ocr_results=[(table_ocr_boxes, table_ocr_texts, table_ocr_scores)])
+        if table_ocr_boxes and len(table_ocr_boxes) > 0:
+            boxes = table_ocr_boxes
+            texts = table_ocr_texts
+            scores = table_ocr_scores
         else:
-            out = table_engine(crop_img)
+            # Provide dummy single box with empty text so format_ocr_results has valid 2D array
+            boxes = [[[0, 0], [1, 0], [1, 1], [0, 1]]]
+            texts = [""]
+            scores = [0.0]
 
-        if out and out.pred_htmls:
+        out = table_engine(crop_img, ocr_results=[(boxes, texts, scores)])
+
+        if out and out.pred_htmls and len(out.pred_htmls) > 0:
             html = out.pred_htmls[0]
             cell_boxes = out.cell_bboxes[0] if (out.cell_bboxes is not None and len(out.cell_bboxes) > 0) else None
             return parse_html_table_to_model(
@@ -196,6 +206,8 @@ def extract_table_model(crop_img: np.ndarray,
                 cell_bboxes=cell_boxes,
                 page_content_width=page_content_width
             )
-    except Exception:
-        pass
+        else:
+            logger.warning("RapidTable returned empty pred_htmls")
+    except Exception as exc:
+        logger.warning(f"Table extraction failed: {exc}", exc_info=True)
     return None

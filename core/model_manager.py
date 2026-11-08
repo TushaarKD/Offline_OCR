@@ -82,9 +82,9 @@ def get_table_engine():
         from rapid_table import RapidTable, RapidTableInput
         table_path = get_local_model_path("slanet-plus.onnx")
         if os.path.exists(table_path):
-            cfg = RapidTableInput(model_dir_or_path=table_path, use_ocr=False)
+            cfg = RapidTableInput(model_dir_or_path=table_path, use_ocr=True)
             _table_instance = RapidTable(cfg=cfg)
         else:
-            cfg = RapidTableInput(use_ocr=False)
+            cfg = RapidTableInput(use_ocr=True)
             _table_instance = RapidTable(cfg=cfg)
     return _table_instance
